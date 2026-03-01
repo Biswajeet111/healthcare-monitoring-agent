@@ -10,6 +10,10 @@ __pycache__/
 
 # Database (optional: keep if you want demo data)
 # data/health.db
-*.pkl
+# ML Models
 models/
+*.pkl
+
+# Notebooks
 notebooks/
+
