@@ -1,6 +1,16 @@
 streamlit
 langchain
+langchain-community
+langchain-chroma
+langchain-groq
+chromadb
+pypdf
+sentence-transformers
 openai
 pandas
 python-dotenv
 matplotlib
+scikit-learn
+joblib
+seaborn
+xgboost
