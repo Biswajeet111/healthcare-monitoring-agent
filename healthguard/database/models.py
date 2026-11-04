@@ -1,5 +1,5 @@
 from datetime import datetime
-
+from sqlalchemy import UniqueConstraint
 from sqlalchemy import (
     Column,
     Integer,
@@ -22,6 +22,7 @@ class UserProfile(Base):
     full_name = Column(String(150), nullable=False)
     email = Column(String(255), unique=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    password_hash = Column(String(255), nullable=True)
 
     health_metrics = relationship(
         "HealthMetric",
@@ -52,6 +53,25 @@ class HealthMetric(Base):
     unit = Column(String(30), nullable=False)
     recorded_at = Column(DateTime, default=datetime.utcnow)
     notes = Column(Text, nullable=True)
+    original_value = Column(Float, nullable=True)
+    original_unit = Column(String(50), nullable=True)
+    source = Column(
+    String(30),
+    nullable=False,
+    default="manual",
+    server_default="manual"
+    )
+
+    context = Column(
+        String(50),
+        nullable=True
+    )
+
+    measurement_group_id = Column(
+        String(36),
+        nullable=True,
+        index=True
+    )
 
     user = relationship(
         "UserProfile",
@@ -114,3 +134,37 @@ class MedicationLog(Base):
         "Medication",
         back_populates="adherence_logs"
     )
+
+class MedicalDocument(Base):
+    __tablename__ = "medical_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user_profiles.id"), nullable=False, index=True)
+
+    filename = Column(String(255), nullable=False)
+    stored_path = Column(String(500), nullable=False)
+    content_type = Column(String(100), default="application/pdf")
+    file_size = Column(Integer, nullable=False)
+    sha256_hash = Column(String(64), nullable=False)
+
+    extracted_text = Column(Text, nullable=True)
+
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+class CSVImport(Base):
+    __tablename__ = "csv_imports"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "sha256_hash",
+            name="uq_csv_import_user_hash"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user_profiles.id"), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    sha256_hash = Column(String(64), nullable=False)
+    imported_count = Column(Integer, default=0)
+    imported_at = Column(DateTime, default=datetime.utcnow, nullable=False)

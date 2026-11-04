@@ -1,0 +1,5 @@
+metric_type,value,unit,recorded_at,notes
+heart_rate,75,bpm,2026-11-04T09:00:00,Morning reading
+blood_glucose,110,mg/dL,2026-11-04T09:15:00,Fasting
+weight,70,kg,2026-11-04T09:30:00,Weekly measurement
+blood_pressure_systolic,120,mmHg,2026-11-04T10:00:00,BP reading

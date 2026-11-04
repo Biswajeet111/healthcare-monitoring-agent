@@ -19,3 +19,4 @@ models/
 *.db
 *.sqlite
 *.sqlite3
+storage/

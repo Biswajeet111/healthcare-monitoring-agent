@@ -1,0 +1,3 @@
+metric_type,value,unit,recorded_at,notes
+blood_glucose,5.5,mmol/L,2026-11-04T09:00:00,Glucose conversion test
+heart_rate,75,bpm,2026-11-04T09:15:00,Heart rate test

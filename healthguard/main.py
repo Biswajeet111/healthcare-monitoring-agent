@@ -1,19 +1,40 @@
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
+from collections import defaultdict
 from datetime import datetime, time
-
-from healthguard.database.models import MedicationLog
-from healthguard.schemas import MedicationLogCreate, MedicationLogResponse
-from healthguard.schemas import MedicationCreate, MedicationResponse
-from healthguard.database.models import Medication
-from healthguard.database.session import get_db
+from uuid import uuid4
+import hashlib
+from sqlalchemy.exc import IntegrityError
+from pathlib import Path
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy.orm import Session
+from healthguard.services.csv_service import parse_health_csv
+from fastapi import UploadFile, File
+from healthguard.database.models import MedicalDocument
+from healthguard.services.document_service import process_medical_pdf
+from healthguard.schemas import MedicalDocumentResponse
+from healthguard.core.dependencies import get_current_user
+from healthguard.core.security import (
+    create_access_token,
+    hash_password,
+    verify_password,
+)
+from healthguard.services.normalization import normalize_measurement
 from healthguard.database import models
+from healthguard.database.models import Medication, MedicationLog
+from healthguard.database.session import get_db
 from healthguard.schemas import (
-    UserProfileCreate,
-    UserProfileResponse,
+    BloodPressureCreate,
     HealthMetricCreate,
     HealthMetricResponse,
+    MedicationCreate,
+    MedicationLogCreate,
+    MedicationLogResponse,
+    MedicationResponse,
+    TokenResponse,
+    UserLogin,
+    UserProfileResponse,
+    UserRegister,
 )
+
 
 app = FastAPI(
     title="HealthGuard AI",
@@ -22,30 +43,78 @@ app = FastAPI(
 )
 
 
+def verify_user_access(
+    requested_user_id: int,
+    current_user: models.UserProfile,
+) -> None:
+    """Ensure the authenticated user can only access their own records."""
+    if requested_user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to access this user's data",
+        )
+
+
+def get_owned_medication(
+    medication_id: int,
+    current_user: models.UserProfile,
+    db: Session,
+) -> Medication:
+    """Retrieve a medication only if it belongs to the authenticated user."""
+    medication = (
+        db.query(Medication)
+        .filter(Medication.id == medication_id)
+        .first()
+    )
+
+    if medication is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Medication not found",
+        )
+
+    if medication.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to access this medication",
+        )
+
+    return medication
+
+
 @app.get("/")
 def home():
     return {"message": "HealthGuard AI API is running"}
 
 
-@app.post("/users", response_model=UserProfileResponse)
-def create_user(
-    user: UserProfileCreate,
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/register", response_model=UserProfileResponse)
+def register_user(
+    user: UserRegister,
     db: Session = Depends(get_db),
 ):
-    if user.email:
-        existing_user = (
-            db.query(models.UserProfile)
-            .filter(models.UserProfile.email == user.email)
-            .first()
+    email = user.email.strip().lower()
+
+    existing_user = (
+        db.query(models.UserProfile)
+        .filter(models.UserProfile.email == email)
+        .first()
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Email already registered",
         )
 
-        if existing_user:
-            raise HTTPException(
-                status_code=409,
-                detail="Email already registered",
-            )
-
-    new_user = models.UserProfile(**user.model_dump())
+    new_user = models.UserProfile(
+        full_name=user.full_name.strip(),
+        email=email,
+        password_hash=hash_password(user.password),
+    )
 
     db.add(new_user)
     db.commit()
@@ -54,22 +123,83 @@ def create_user(
     return new_user
 
 
+@app.post("/auth/login", response_model=TokenResponse)
+def login_user(
+    credentials: UserLogin,
+    db: Session = Depends(get_db),
+):
+    email = credentials.email.strip().lower()
+
+    user = (
+        db.query(models.UserProfile)
+        .filter(models.UserProfile.email == email)
+        .first()
+    )
+
+    if user is None or not user.password_hash:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not verify_password(credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token = create_access_token({"sub": str(user.id)})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+@app.get("/auth/me", response_model=UserProfileResponse)
+def get_my_profile(
+    current_user: models.UserProfile = Depends(get_current_user),
+):
+    return current_user
+
+
+# ---------------------------------------------------------------------------
+# Health metrics
+# ---------------------------------------------------------------------------
+
 @app.post("/metrics", response_model=HealthMetricResponse)
 def create_metric(
     metric: HealthMetricCreate,
     user_id: int,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = db.query(models.UserProfile).filter(
-        models.UserProfile.id == user_id
-    ).first()
+    verify_user_access(user_id, current_user)
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Preserve original measurement
+    original_value = metric.value
+    original_unit = metric.unit
+
+    # Normalize measurement
+    normalized_value, normalized_unit = normalize_measurement(
+        metric.metric_type,
+        original_value,
+        original_unit
+    )
 
     new_metric = models.HealthMetric(
-        user_id=user_id,
-        **metric.model_dump(),
+        user_id=current_user.id,
+        metric_type=metric.metric_type,
+        value=normalized_value,
+        unit=normalized_unit,
+        original_value=original_value,
+        original_unit=original_unit,
+        source=metric.source,
+        context=metric.context,
+        measurement_group_id=metric.measurement_group_id,
+        notes=metric.notes,
     )
 
     db.add(new_metric)
@@ -79,53 +209,398 @@ def create_metric(
     return new_metric
 
 
-@app.get("/users/{user_id}/metrics", response_model=list[HealthMetricResponse])
+
+@app.get(
+    "/users/{user_id}/metrics",
+    response_model=list[HealthMetricResponse],
+)
 def get_user_metrics(
     user_id: int,
+    metric_type: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    limit: int = 100,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = db.query(models.UserProfile).filter(
-        models.UserProfile.id == user_id
-    ).first()
+    verify_user_access(user_id, current_user)
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    if limit < 1 or limit > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 500",
+        )
+
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date cannot be after end_date",
+        )
+
+    query = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id
+    )
+
+    if metric_type:
+        query = query.filter(
+            models.HealthMetric.metric_type == metric_type
+        )
+
+    if start_date:
+        query = query.filter(
+            models.HealthMetric.recorded_at >= start_date
+        )
+
+    if end_date:
+        query = query.filter(
+            models.HealthMetric.recorded_at <= end_date
+        )
 
     return (
+        query
+        .order_by(models.HealthMetric.recorded_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+@app.get("/users/{user_id}/metrics/analytics")
+def get_metric_analytics(
+    user_id: int,
+    metric_type: str,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_user_access(user_id, current_user)
+
+    metrics = (
         db.query(models.HealthMetric)
-        .filter(models.HealthMetric.user_id == user_id)
+        .filter(
+            models.HealthMetric.user_id == current_user.id,
+            models.HealthMetric.metric_type == metric_type,
+        )
+        .order_by(models.HealthMetric.recorded_at.asc())
+        .all()
+    )
+
+    if not metrics:
+        return {
+            "user_id": current_user.id,
+            "metric_type": metric_type,
+            "total_readings": 0,
+            "message": "No readings available",
+        }
+
+    # Keep units separate so incompatible measurements are never averaged.
+    by_unit = defaultdict(list)
+    for metric in metrics:
+        by_unit[metric.unit].append(metric)
+
+    summaries = []
+
+    for unit, unit_metrics in by_unit.items():
+        values = [item.value for item in unit_metrics]
+        daily_data = defaultdict(list)
+
+        for item in unit_metrics:
+            daily_data[item.recorded_at.date().isoformat()].append(item.value)
+
+        daily_averages = [
+            {
+                "date": day,
+                "average": round(sum(day_values) / len(day_values), 2),
+            }
+            for day, day_values in sorted(daily_data.items())
+        ]
+
+        summaries.append({
+            "unit": unit,
+            "total_readings": len(values),
+            "average": round(sum(values) / len(values), 2),
+            "minimum": min(values),
+            "maximum": max(values),
+            "first_reading": values[0],
+            "latest_reading": values[-1],
+            "daily_averages": daily_averages,
+        })
+
+    return {
+        "user_id": current_user.id,
+        "metric_type": metric_type,
+        "unit_summaries": summaries,
+    }
+
+
+@app.post("/users/{user_id}/metrics/blood-pressure")
+def create_blood_pressure(
+    user_id: int,
+    reading: BloodPressureCreate,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_user_access(user_id, current_user)
+
+    measurement_group_id = str(uuid4())
+
+    systolic = models.HealthMetric(
+        user_id=current_user.id,
+        metric_type="blood_pressure_systolic",
+        value=reading.systolic,
+        unit=reading.unit,
+        original_value=reading.systolic,
+        original_unit=reading.unit,
+        source=reading.source,
+        context=reading.context,
+        measurement_group_id=measurement_group_id,
+        notes=reading.notes,
+    )
+
+    diastolic = models.HealthMetric(
+        user_id=current_user.id,
+        metric_type="blood_pressure_diastolic",
+        value=reading.diastolic,
+        unit=reading.unit,
+        original_value=reading.diastolic,
+        original_unit=reading.unit,
+        source=reading.source,
+        context=reading.context,
+        measurement_group_id=measurement_group_id,
+        notes=reading.notes,
+    )
+
+    try:
+        db.add_all([systolic, diastolic])
+        db.commit()
+        db.refresh(systolic)
+        db.refresh(diastolic)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save blood pressure readings",
+        )
+
+    return {
+        "message": "Blood pressure recorded successfully",
+        "measurement_group_id": measurement_group_id,
+        "systolic": {
+            "id": systolic.id,
+            "value": systolic.value,
+            "unit": systolic.unit,
+        },
+        "diastolic": {
+            "id": diastolic.id,
+            "value": diastolic.value,
+            "unit": diastolic.unit,
+        },
+    }
+
+
+@app.get("/users/{user_id}/metrics/blood-pressure/history")
+def get_blood_pressure_history(
+    user_id: int,
+    limit: int = 100,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_user_access(user_id, current_user)
+
+    if limit < 1 or limit > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 500",
+        )
+
+    metrics = (
+        db.query(models.HealthMetric)
+        .filter(
+            models.HealthMetric.user_id == current_user.id,
+            models.HealthMetric.metric_type.in_([
+                "blood_pressure_systolic",
+                "blood_pressure_diastolic",
+            ]),
+            models.HealthMetric.measurement_group_id.isnot(None),
+        )
         .order_by(models.HealthMetric.recorded_at.desc())
         .all()
     )
+
+    grouped_readings = defaultdict(dict)
+
+    for metric in metrics:
+        grouped_readings[metric.measurement_group_id][metric.metric_type] = metric
+
+    paired_readings = []
+
+    for group_id, readings in grouped_readings.items():
+        systolic = readings.get("blood_pressure_systolic")
+        diastolic = readings.get("blood_pressure_diastolic")
+
+        if systolic is None or diastolic is None:
+            continue
+
+        # A valid pair must use the same unit and timestamp.
+        if systolic.unit != diastolic.unit:
+            continue
+
+        paired_readings.append({
+            "measurement_group_id": group_id,
+            "recorded_at": systolic.recorded_at,
+            "systolic": systolic.value,
+            "diastolic": diastolic.value,
+            "unit": systolic.unit,
+            "context": systolic.context,
+            "source": systolic.source,
+        })
+
+    paired_readings.sort(
+        key=lambda item: item["recorded_at"],
+        reverse=True,
+    )
+    paired_readings = paired_readings[:limit]
+
+    if not paired_readings:
+        return {
+            "user_id": current_user.id,
+            "total_readings": 0,
+            "history": [],
+            "message": "No paired blood pressure readings available",
+        }
+
+    systolic_values = [item["systolic"] for item in paired_readings]
+    diastolic_values = [item["diastolic"] for item in paired_readings]
+
+    return {
+        "user_id": current_user.id,
+        "total_readings": len(paired_readings),
+        "statistics": {
+            "average_systolic": round(
+                sum(systolic_values) / len(systolic_values), 2
+            ),
+            "average_diastolic": round(
+                sum(diastolic_values) / len(diastolic_values), 2
+            ),
+            "highest_systolic": max(systolic_values),
+            "lowest_systolic": min(systolic_values),
+            "highest_diastolic": max(diastolic_values),
+            "lowest_diastolic": min(diastolic_values),
+        },
+        "history": paired_readings,
+    }
+
+
+@app.get("/users/{user_id}/metrics/summary")
+def get_metrics_summary(
+    user_id: int,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_user_access(user_id, current_user)
+
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date cannot be after end_date",
+        )
+
+    query = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id
+    )
+
+    if start_date:
+        query = query.filter(
+            models.HealthMetric.recorded_at >= start_date
+        )
+
+    if end_date:
+        query = query.filter(
+            models.HealthMetric.recorded_at <= end_date
+        )
+
+    metrics = query.order_by(
+        models.HealthMetric.recorded_at.asc()
+    ).all()
+
+    grouped_metrics = defaultdict(list)
+
+    for metric in metrics:
+        grouped_metrics[(metric.metric_type, metric.unit)].append(metric)
+
+    summaries = []
+
+    for (metric_type, unit), readings in grouped_metrics.items():
+        values = [reading.value for reading in readings]
+        daily_data = defaultdict(list)
+
+        for reading in readings:
+            day = reading.recorded_at.date().isoformat()
+            daily_data[day].append(reading.value)
+
+        daily_averages = [
+            {
+                "date": day,
+                "average": round(sum(day_values) / len(day_values), 2),
+            }
+            for day, day_values in sorted(daily_data.items())
+        ]
+
+        latest = readings[-1]
+
+        summaries.append({
+            "metric_type": metric_type,
+            "unit": unit,
+            "total_readings": len(readings),
+            "average": round(sum(values) / len(values), 2),
+            "minimum": min(values),
+            "maximum": max(values),
+            "latest_reading": {
+                "value": latest.value,
+                "recorded_at": latest.recorded_at,
+                "context": latest.context,
+                "source": latest.source,
+            },
+            "daily_averages": daily_averages,
+        })
+
+    return {
+        "user_id": current_user.id,
+        "total_readings": len(metrics),
+        "total_metric_groups": len(summaries),
+        "summaries": summaries,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Medication management
+# ---------------------------------------------------------------------------
 
 @app.post("/medications", response_model=MedicationResponse)
 def create_medication(
     medication: MedicationCreate,
     user_id: int,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = db.query(models.UserProfile).filter(
-        models.UserProfile.id == user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    verify_user_access(user_id, current_user)
 
     medication_data = medication.model_dump()
 
-    # Convert date objects into SQLAlchemy DateTime values.
     medication_data["start_date"] = datetime.combine(
-        medication_data["start_date"], time.min
+        medication_data["start_date"],
+        time.min,
     )
 
     if medication_data["end_date"]:
         medication_data["end_date"] = datetime.combine(
-            medication_data["end_date"], time.min
+            medication_data["end_date"],
+            time.min,
         )
 
     new_medication = Medication(
-        user_id=user_id,
-        **medication_data
+        user_id=current_user.id,
+        **medication_data,
     )
 
     db.add(new_medication)
@@ -135,62 +610,58 @@ def create_medication(
     return new_medication
 
 
-@app.get("/users/{user_id}/medications", response_model=list[MedicationResponse])
+@app.get(
+    "/users/{user_id}/medications",
+    response_model=list[MedicationResponse],
+)
 def get_user_medications(
     user_id: int,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = db.query(models.UserProfile).filter(
-        models.UserProfile.id == user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    verify_user_access(user_id, current_user)
 
     return (
         db.query(Medication)
         .filter(
-            Medication.user_id == user_id,
-            Medication.is_active == True
+            Medication.user_id == current_user.id,
+            Medication.is_active.is_(True),
         )
         .order_by(Medication.created_at.desc())
         .all()
     )
 
+
 @app.post(
     "/medications/{medication_id}/logs",
-    response_model=MedicationLogResponse
+    response_model=MedicationLogResponse,
 )
 def record_medication_log(
     medication_id: int,
     log: MedicationLogCreate,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    medication = db.query(Medication).filter(
-        Medication.id == medication_id
-    ).first()
-
-    if not medication:
-        raise HTTPException(
-            status_code=404,
-            detail="Medication not found"
-        )
+    medication = get_owned_medication(
+        medication_id,
+        current_user,
+        db,
+    )
 
     log_data = log.model_dump()
 
     if log_data["status"] == "taken":
         if log_data["taken_at"] is None:
             log_data["taken_at"] = datetime.utcnow()
-    else:
-        if log_data["taken_at"] is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="taken_at is only valid when status is taken"
-            )
+    elif log_data["taken_at"] is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="taken_at is only valid when status is taken",
+        )
 
     new_log = MedicationLog(
-        medication_id=medication_id,
-        **log_data
+        medication_id=medication.id,
+        **log_data,
     )
 
     db.add(new_log)
@@ -202,25 +673,22 @@ def record_medication_log(
 
 @app.get(
     "/medications/{medication_id}/logs",
-    response_model=list[MedicationLogResponse]
+    response_model=list[MedicationLogResponse],
 )
 def get_medication_logs(
     medication_id: int,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    medication = db.query(Medication).filter(
-        Medication.id == medication_id
-    ).first()
-
-    if not medication:
-        raise HTTPException(
-            status_code=404,
-            detail="Medication not found"
-        )
+    medication = get_owned_medication(
+        medication_id,
+        current_user,
+        db,
+    )
 
     return (
         db.query(MedicationLog)
-        .filter(MedicationLog.medication_id == medication_id)
+        .filter(MedicationLog.medication_id == medication.id)
         .order_by(MedicationLog.scheduled_at.desc())
         .all()
     )
@@ -229,21 +697,20 @@ def get_medication_logs(
 @app.get("/medications/{medication_id}/adherence")
 def get_medication_adherence(
     medication_id: int,
+    current_user: models.UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    medication = db.query(Medication).filter(
-        Medication.id == medication_id
-    ).first()
+    medication = get_owned_medication(
+        medication_id,
+        current_user,
+        db,
+    )
 
-    if not medication:
-        raise HTTPException(
-            status_code=404,
-            detail="Medication not found"
-        )
-
-    logs = db.query(MedicationLog).filter(
-        MedicationLog.medication_id == medication_id
-    ).all()
+    logs = (
+        db.query(MedicationLog)
+        .filter(MedicationLog.medication_id == medication.id)
+        .all()
+    )
 
     taken = sum(log.status == "taken" for log in logs)
     missed = sum(log.status == "missed" for log in logs)
@@ -258,11 +725,193 @@ def get_medication_adherence(
     )
 
     return {
-        "medication_id": medication_id,
+        "medication_id": medication.id,
         "medication_name": medication.name,
         "total_logged": len(logs),
         "taken": taken,
         "missed": missed,
         "skipped": skipped,
-        "adherence_percentage": percentage
+        "adherence_percentage": percentage,
+    }
+
+@app.post(
+    "/documents/upload",
+    response_model=MedicalDocumentResponse,
+    status_code=201
+)
+async def upload_medical_document(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    result = await process_medical_pdf(file)
+
+    document = MedicalDocument(
+        user_id=current_user.id,
+        filename=result["filename"],
+        stored_path=result["stored_path"],
+        content_type="application/pdf",
+        file_size=result["file_size"],
+        sha256_hash=result["sha256_hash"],
+        extracted_text=result["extracted_text"]
+    )
+
+    try:
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        return document
+    except Exception:
+        db.rollback()
+        import os
+        if os.path.exists(result["stored_path"]):
+            os.remove(result["stored_path"])
+        raise HTTPException(status_code=500, detail="Could not save document")
+
+
+@app.get("/documents", response_model=list[MedicalDocumentResponse])
+def get_medical_documents(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return (
+        db.query(MedicalDocument)
+        .filter(MedicalDocument.user_id == current_user.id)
+        .order_by(MedicalDocument.uploaded_at.desc())
+        .all()
+    )
+
+@app.delete("/documents/{document_id}")
+def delete_medical_document(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    document = (
+        db.query(MedicalDocument)
+        .filter(
+            MedicalDocument.id == document_id,
+            MedicalDocument.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    stored_path = Path(document.stored_path).resolve()
+    upload_root = Path("storage/medical_reports").resolve()
+
+    # Prevent deletion outside the medical reports directory.
+    if upload_root not in stored_path.parents:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid document storage path"
+        )
+
+    db.delete(document)
+    db.commit()
+
+    if stored_path.is_file():
+        stored_path.unlink()
+
+    return {
+        "message": "Medical document deleted successfully",
+        "document_id": document_id
+    }
+
+@app.post("/metrics/import-csv")
+async def import_health_csv(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV files are allowed"
+        )
+
+    content = await file.read()
+
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    existing_import = db.query(models.CSVImport).filter(
+        models.CSVImport.user_id == current_user.id,
+        models.CSVImport.sha256_hash == file_hash
+    ).first()
+
+    if existing_import:
+        raise HTTPException(
+            status_code=409,
+            detail="This CSV file has already been imported"
+        )
+
+    result = parse_health_csv(content)
+    imported = 0
+
+    try:
+        for record in result["records"]:
+            original_value = record["value"]
+            original_unit = record["unit"]
+
+            normalized_value, normalized_unit = normalize_measurement(
+                record["metric_type"],
+                original_value,
+                original_unit
+            )
+
+            metric = models.HealthMetric(
+                user_id=current_user.id,
+                metric_type=record["metric_type"],
+                value=normalized_value,
+                unit=normalized_unit,
+                original_value=original_value,
+                original_unit=original_unit,
+                source="imported",
+                context=record["context"],
+                notes=record["notes"],
+                measurement_group_id=record["measurement_group_id"],
+                recorded_at=record["recorded_at"]
+            )
+
+            db.add(metric)
+            imported += 1
+
+        import_record = models.CSVImport(
+            user_id=current_user.id,
+            filename=file.filename,
+            sha256_hash=file_hash,
+            imported_count=imported
+        )
+
+        db.add(import_record)
+        db.commit()
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This CSV file has already been imported"
+        )
+
+    except Exception:
+        db.rollback()
+        import logging
+        logging.exception("CSV import failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="CSV import failed"
+        )
+
+    return {
+        "message": "CSV import completed",
+        "imported_count": imported,
+        "failed_count": len(result["errors"]),
+        "import_hash": file_hash,
+        "errors": result["errors"]
     }
