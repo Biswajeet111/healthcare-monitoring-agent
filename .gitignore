@@ -14,3 +14,8 @@ __pycache__/
 models/
 *.pkl
 
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
