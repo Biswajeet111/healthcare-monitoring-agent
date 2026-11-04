@@ -1,2 +1,271 @@
-# healthcare-monitoring-agent
-AI-powered healthcare monitoring agent built with Python, LangChain, Streamlit, and SQLite. Tracks medications with reminders, integrates fitness data (Google Fit), and provides reliable medical info. Focused on patient safety, data privacy, and user-friendly dashboards for Indian healthcare context.
+# 🏥 Healthcare Monitoring AI Agent
+
+An **AI-powered healthcare monitoring system** that combines **machine learning, medical knowledge retrieval (RAG), and health data tracking** to provide intelligent health insights and risk predictions.
+
+This project was built as part of the **Agentic AI Saksham Internship**, focusing on building an **autonomous healthcare assistant capable of monitoring patient health metrics and providing evidence-based recommendations.**
+
+---
+
+# 🚀 Project Overview
+
+The **Healthcare Monitoring AI Agent** integrates multiple AI components to create a smart health assistant.
+
+The system can:
+
+• Track user health metrics
+• Predict potential health risks using machine learning
+• Retrieve medical knowledge from clinical guidelines using RAG
+• Provide AI-generated explanations and recommendations
+• Track medication schedules and adherence
+
+The goal is to **enable proactive healthcare monitoring and early risk detection**.
+
+---
+
+# 🧠 System Architecture
+
+User Health Metrics
+↓
+Health Monitoring Database
+↓
+Machine Learning Risk Prediction
+↓
+Medical Knowledge Retrieval (RAG)
+↓
+AI Explanation & Recommendations
+
+---
+
+# ✨ Key Features
+
+## 📊 Health Metrics Monitoring
+
+The system records daily health metrics including:
+
+• Weight
+• Blood Pressure
+• Glucose Levels
+• Heart Rate
+• Step Count
+• Sleep Duration
+
+These metrics are stored in a **SQLite healthcare database**.
+
+---
+
+## 💊 Medication Tracking
+
+Users can manage their medication schedules.
+
+Features include:
+
+• Add medication reminders
+• Track dosage schedules
+• Mark medications as taken
+• Monitor adherence patterns
+
+---
+
+## 🤖 AI Health Risk Prediction
+
+Machine learning models analyze medical indicators to predict **diabetes risk**.
+
+Models evaluated:
+
+• Logistic Regression
+• Random Forest
+• Support Vector Machine (SVM)
+• Gradient Boosting
+
+Best model used:
+
+**Gradient Boosting Classifier (~77–78% accuracy)**
+
+---
+
+## 📚 Retrieval Augmented Generation (RAG)
+
+The system retrieves medical knowledge from trusted clinical guidelines including:
+
+• WHO diabetes monitoring guidelines
+• American Heart Association hypertension guidelines
+• ADA diabetes diagnosis & treatment guidelines
+
+These documents are converted into **vector embeddings using ChromaDB**, allowing the AI agent to provide **context-aware medical explanations**.
+
+---
+
+## 🧑‍⚕️ AI Healthcare Agent
+
+The AI agent combines:
+
+Machine Learning Risk Prediction
++
+Medical Knowledge Retrieval
++
+Large Language Model Reasoning
+
+This allows the system to generate **personalized health insights grounded in medical guidelines**.
+
+Example workflow:
+
+Patient Health Data → Risk Prediction → Medical Guidelines → AI Recommendation
+
+---
+
+# 🛠️ Tech Stack
+
+### Programming Language
+
+Python
+
+### Machine Learning
+
+Scikit-learn
+Gradient Boosting
+Support Vector Machine
+
+### AI / LLM Framework
+
+LangChain
+
+### Vector Database
+
+ChromaDB
+
+### Embeddings
+
+HuggingFace Sentence Transformers
+
+### Large Language Model
+
+Groq LLM
+
+### Database
+
+SQLite
+
+### Data Analysis
+
+Pandas
+NumPy
+Seaborn
+Matplotlib
+
+---
+
+# 📂 Project Structure
+
+```
+healthcare-monitoring-agent
+
+│
+├── health_rag_agent.ipynb
+│   RAG system for medical knowledge retrieval
+│
+├── health_analytics.ipynb
+│   Machine learning pipeline for health risk prediction
+│
+├── health_monitoring.db
+│   SQLite database storing user health metrics
+│
+├── vector_db/
+│   Chroma vector database for medical documents
+│
+├── data/
+│   Medical guideline PDFs used for RAG
+│
+├── README.md
+│
+└── requirements.txt
+```
+
+---
+
+# ⚙️ Installation
+
+Clone the repository:
+
+```
+git clone https://github.com/YOUR_USERNAME/healthcare-monitoring-agent.git
+```
+
+Navigate to the project directory:
+
+```
+cd healthcare-monitoring-agent
+```
+
+Install dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+---
+
+# 📈 Machine Learning Pipeline
+
+The diabetes risk prediction model uses the **PIMA Diabetes dataset**.
+
+Steps performed:
+
+1. Data Cleaning
+2. Handling Missing Values
+3. Feature Scaling
+4. Model Training
+5. Model Comparison
+6. Final Model Selection
+
+Best performing model:
+
+**Gradient Boosting Classifier**
+
+---
+
+# 📊 Example Prediction
+
+Input Health Metrics
+
+```
+Glucose: 140  
+BMI: 30  
+Age: 45
+```
+
+AI Output
+
+```
+Risk Level: High Diabetes Risk
+
+According to ADA guidelines, individuals with elevated glucose
+levels should adopt lifestyle changes such as increased
+physical activity, dietary adjustments, and regular glucose monitoring.
+```
+
+---
+
+# 🔮 Future Improvements
+
+Planned enhancements include:
+
+• Streamlit healthcare dashboard
+• Real-time wearable health data integration
+• Hypertension risk prediction model
+• Advanced patient monitoring analytics
+• Deployment as a web application
+
+---
+
+# 👨‍💻 Author
+
+Biswajeet
+Agentic AI Saksham Internship Project
+
+---
+
+# 📜 License
+
+This project is for **educational and research purposes only**.
+
+Medical advice generated by this system should **not replace professional medical consultation**.
