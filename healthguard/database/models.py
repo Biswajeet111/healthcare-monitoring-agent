@@ -65,6 +65,12 @@ class UserProfile(Base):
         cascade="all, delete-orphan",
     )
 
+    agent_audits = relationship(
+        "AgentExecutionAudit",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
 
 # ============================================================
 # HEALTH METRIC
@@ -868,3 +874,82 @@ class DocumentIndexStatus(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     document = relationship("MedicalDocument")
+
+
+# ============================================================
+# AGENT EXECUTION AUDIT  (Phase 8)
+# ============================================================
+
+class AgentExecutionAudit(Base):
+    """
+    Persistent audit log of an agentic workflow execution.
+
+    Maintains traceability, idempotency, execution performance,
+    and agent-level steps for auditability and debugging.
+    """
+
+    __tablename__ = "agent_execution_audits"
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'completed', 'failed', 'escalated', 'degraded')",
+            name="ck_agent_audit_status",
+        ),
+        Index(
+            "ix_agent_audits_user_created",
+            "user_id",
+            "created_at",
+        ),
+        Index(
+            "ix_agent_audits_user_idempotency",
+            "user_id",
+            "idempotency_key",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    workflow_type = Column(
+        String(60),
+        nullable=False,
+        index=True,
+    )
+
+    status = Column(
+        String(30),
+        nullable=False,
+        default="pending",
+    )
+
+    idempotency_key = Column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    input_payload = Column(Text, nullable=True)
+
+    execution_steps = Column(Text, nullable=True)
+
+    result_summary = Column(Text, nullable=True)
+
+    error_message = Column(Text, nullable=True)
+
+    duration_ms = Column(Integer, nullable=True)
+
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+    )
+
+    completed_at = Column(DateTime, nullable=True)
+
+    user = relationship("UserProfile", back_populates="agent_audits")

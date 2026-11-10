@@ -65,25 +65,41 @@ def get_embedding_model(model_name: Optional[str] = None):
         return None
 
 
-def embed_texts(texts: list[str], model_name: Optional[str] = None) -> list[list[float]]:
+def embed_texts(
+    texts: list[str],
+    model_name: Optional[str] = None,
+) -> list[list[float]]:
     """
-    Embed a list of text strings.
-    Always succeeds: uses local SentenceTransformer if cached, else deterministic local vectorizer.
+    Generate embeddings using the configured SentenceTransformer model.
+
+    Never silently switch embedding algorithms.
     """
+
     if not texts:
         return []
 
     model = get_embedding_model(model_name)
-    if model is not None:
-        try:
-            embeddings = model.encode(texts, show_progress_bar=False)
-            return [emb.tolist() for emb in embeddings]
-        except Exception as exc:
-            logger.warning("Neural embedding failed (%s), using local fallback.", exc)
 
-    return _fallback_embed(texts)
+    if model is None:
+        raise RuntimeError(
+            "Required SentenceTransformer embedding model is unavailable. "
+            "Cannot safely generate embeddings for the existing vector index."
+        )
 
+    try:
+        embeddings = model.encode(
+            texts,
+            show_progress_bar=False,
+        )
 
+        return embeddings.tolist()
+
+    except Exception as exc:
+        logger.exception("SentenceTransformer embedding failed")
+
+        raise RuntimeError(
+            f"Embedding generation failed: {exc}"
+        ) from exc
 def embed_query(query: str, model_name: Optional[str] = None) -> list[float]:
     """Embed a single query string into a 384-dimensional vector."""
     results = embed_texts([query], model_name)

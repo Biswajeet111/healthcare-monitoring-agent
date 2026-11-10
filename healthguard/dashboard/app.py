@@ -130,7 +130,7 @@ def api_request(method, endpoint, **kwargs):
             method,
             f"{API_URL}{endpoint}",
             headers=headers,
-            timeout=20,
+            timeout=200,
             **kwargs
         )
 
@@ -387,6 +387,145 @@ medications = (
     else []
 )
 
+
+# --------------------------------------------------
+# AGENTIC AI HEALTH OVERVIEW (PHASE 8)
+# --------------------------------------------------
+
+st.header("🤖 Agentic Health Overview")
+st.caption(
+    "Coordinated multi-agent intelligence evaluating monitoring rules, "
+    "risk patterns, medication adherence, verified medical knowledge, and safety escalations."
+)
+
+with st.container():
+    orch_col1, orch_col2 = st.columns([3, 1])
+    with orch_col1:
+        st.info(
+            "The Agentic Orchestrator coordinates specialized autonomous agents to produce "
+            "explainable, grounded clinical assessments while strictly enforcing safety guardrails."
+        )
+    with orch_col2:
+        run_assessment_btn = st.button(
+            "⚡ Run Agentic Assessment",
+            key="btn_run_agentic_assessment",
+            type="primary",
+            use_container_width=True,
+        )
+
+# Fetch latest summary or trigger assessment
+if run_assessment_btn or "agentic_summary" not in st.session_state:
+    with st.spinner("Agents coordinating health assessment..."):
+        summary_resp = api_request(
+            "GET",
+            f"/orchestration/summary?user_id={user_id}&primary_metric=blood_glucose",
+        )
+        if summary_resp and summary_resp.status_code == 200:
+            st.session_state.agentic_summary = summary_resp.json()
+        elif "agentic_summary" not in st.session_state:
+            st.session_state.agentic_summary = None
+
+agentic_data = st.session_state.get("agentic_summary")
+
+if agentic_data:
+    state_val = agentic_data.get("orchestration_state", "completed")
+    state_color = {
+        "completed": "🟢 Normal / Complete",
+        "escalated": "🚨 URGENT SAFETY ESCALATION",
+        "degraded": "🟡 Degraded (Offline Knowledge Service)",
+        "in_progress": "🔵 In Progress",
+    }.get(state_val, f"Status: {state_val}")
+
+    if state_val == "escalated":
+        st.error(f"### {state_color}")
+        esc_info = agentic_data.get("safety_escalation") or {}
+        st.warning(f"**Emergency Guidance:** {esc_info.get('urgent_reason', 'Critical condition detected.')}")
+        st.info(esc_info.get("guidance", "Please seek professional medical assistance immediately."))
+    else:
+        st.markdown(
+            f"**Orchestration Status:** `{state_color}` | "
+            f"Generated: `{agentic_data.get('generated_at', '')[:19]}` | "
+            f"Execution Time: `{agentic_data.get('duration_ms', 0)}ms`"
+        )
+
+    # 4 Quadrants
+    q1, q2, q3, q4 = st.columns(4)
+    with q1:
+        st.markdown("#### 🩺 Monitoring")
+        mon = agentic_data.get("monitoring") or {}
+        st.metric(
+            label=f"{mon.get('metric_type', 'Metric').replace('_', ' ').title()}",
+            value=f"{mon.get('latest_value', 'N/A')} {mon.get('unit', '')}",
+            delta=mon.get("statistical_status", "routine").replace("_", " "),
+        )
+        st.caption(mon.get("summary", "No monitoring observations."))
+
+    with q2:
+        st.markdown("#### 💊 Adherence")
+        med = agentic_data.get("medication") or {}
+        adh_pct = med.get("overall_adherence_percentage")
+        st.metric(
+            label="Adherence Rate",
+            value=f"{adh_pct}%" if adh_pct is not None else "N/A",
+            delta=f"{med.get('overdue_doses_count', 0)} overdue doses",
+            delta_color="inverse",
+        )
+        st.caption(
+            f"{med.get('active_medications_count', 0)} active meds, "
+            f"{len(med.get('pending_reminders', []))} pending reminder(s)."
+        )
+
+    with q3:
+        st.markdown("#### ⚠️ Risk Indicators")
+        risk = agentic_data.get("risk_assessment") or {}
+        r_level = risk.get("risk_level", "low").upper()
+        st.metric(label="Assessed Risk Level", value=r_level)
+        findings = risk.get("rule_based_findings", [])
+        if findings:
+            st.caption(f"Validated findings: {len(findings)} trend observation(s).")
+        ml_est = risk.get("experimental_ml_estimates", [])
+        if ml_est:
+            st.warning("Contains experimental ML estimates (research demonstration only).")
+
+    with q4:
+        st.markdown("#### 🔔 Notifications")
+        notifs = agentic_data.get("notifications") or {}
+        notif_list = notifs.get("notifications_created", [])
+        st.metric(label="Delivered Alerts", value=len(notif_list))
+        st.caption(f"{notifs.get('suppressed_count', 0)} duplicate alerts suppressed.")
+
+    # Supporting Grounded Knowledge
+    know = agentic_data.get("medical_knowledge") or {}
+    citations = know.get("citations", [])
+    if citations:
+        with st.expander(f"📚 Grounded Medical References ({len(citations)} sources cited)", expanded=False):
+            st.markdown(f"**Agent Explanation:**\n{know.get('explanation', '')}")
+            st.markdown("---")
+            for idx, cite in enumerate(citations, 1):
+                st.markdown(
+                    f"**[{idx}] {cite.get('title', 'Reference Document')}** — "
+                    f"*{cite.get('source_organization', 'Health Authority')}*"
+                )
+                if cite.get("source_url"):
+                    st.caption(f"Source URL: {cite.get('source_url')}")
+                st.markdown(f"> {cite.get('excerpt', '')}")
+
+    # Agent Audit Trail
+    with st.expander("📜 Agent Coordination History & Audit Logs", expanded=False):
+        history_resp = api_request("GET", f"/orchestration/history?user_id={user_id}&limit=10")
+        if history_resp and history_resp.status_code == 200:
+            hist_records = history_resp.json()
+            if hist_records:
+                hist_df = pd.DataFrame(hist_records)
+                cols = [c for c in ["created_at", "workflow_type", "status", "duration_ms", "summary"] if c in hist_df.columns]
+                hist_df = hist_df[cols]
+                st.dataframe(hist_df, use_container_width=True)
+            else:
+                st.caption("No agent activity recorded yet.")
+        else:
+            st.caption("Agent execution history currently unavailable.")
+
+st.divider()
 
 # --------------------------------------------------
 # HEALTH OVERVIEW
@@ -2119,7 +2258,7 @@ with rag_tab1:
 
                 sources = result.get("sources", [])
                 if sources:
-                    with st.expander(f"📚 Verified Sources & Citations ({len(sources)} references)"):
+                    with st.expander(f"📚 Retrieved Clinical References ({len(sources)} references)"):
                         for s_idx, src in enumerate(sources, 1):
                             st.markdown(f"**{s_idx}. {src.get('document_title', 'Untitled')}**")
                             if src.get("source_organization"):

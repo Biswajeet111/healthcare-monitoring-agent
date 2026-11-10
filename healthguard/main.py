@@ -21,6 +21,9 @@ from healthguard.api.medication_reminders import (
 from healthguard.api.medical_rag import (
     router as medical_rag_router,
 )
+from healthguard.api.orchestration import (
+    router as orchestration_router,
+)
 from sqlalchemy.orm import Session
 from healthguard.services.csv_service import parse_health_csv
 from healthguard.database.models import MedicalDocument
@@ -91,6 +94,7 @@ app.include_router(notifications_router)
 app.include_router(medication_management_router)
 app.include_router(medication_reminders_router)
 app.include_router(medical_rag_router)
+app.include_router(orchestration_router)
 
 
 # Start medication reminder worker on startup
