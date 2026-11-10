@@ -14,13 +14,12 @@ __pycache__/
 models/
 *.pkl
 
-
+data/vector_db/
 # Local databases
 *.db
 *.sqlite
 *.sqlite3
 storage/
-.env
 .env.*
 !.env.example
 venv/
@@ -34,4 +33,4 @@ chroma_db/
 chroma_storage/
 models/
 *.pkl
-*.joblib
+*.joblibdata/vector_db/
