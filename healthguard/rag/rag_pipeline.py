@@ -204,11 +204,13 @@ def run_rag_pipeline(
         return {
             "answer": None,
             "error": llm_result["error"],
-            "sources": [],
+            "sources": llm_result.get("sources", []),
             "limitations": llm_result.get("limitations", []),
             "disclaimer": DISCLAIMER,
             "is_emergency": safety_result["is_emergency"],
             "emergency_guidance": safety_result["emergency_guidance"],
+            "chunks_retrieved": len(all_chunks),
+            "intent": intent,
         }
 
     # 7. Validate response

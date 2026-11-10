@@ -21,6 +21,14 @@ from healthguard.orchestration.schemas import (
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_DEGRADED_EXPLANATION = (
+    "Verified medical knowledge retrieval is temporarily operating in degraded mode "
+    "(local LLM generation unavailable or returned an error). "
+    "For health questions regarding vital measurements or medications, please consult "
+    "standard clinical guidelines and your healthcare provider."
+)
+
+
 class MedicalKnowledgeAgent:
     """Agent responsible for grounded medical knowledge retrieval and explanations."""
 
@@ -65,26 +73,55 @@ class MedicalKnowledgeAgent:
             )
 
             citations: list[MedicalCitation] = []
-            for src in rag_output.get("sources", []):
+            for src in rag_output.get("sources") or []:
+                title = (
+                    src.get("document_title")
+                    or src.get("title")
+                    or "Clinical Reference Document"
+                )
                 citations.append(
                     MedicalCitation(
-                        title=src.get("title", "Clinical Reference Document"),
-                        source_organization=src.get("source_organization", "Health Authority"),
+                        title=title,
+                        source_organization=src.get("source_organization") or "Health Authority",
                         source_url=src.get("source_url"),
-                        excerpt=src.get("chunk_text", "")[:300],
+                        excerpt=(src.get("chunk_text") or src.get("excerpt") or "")[:300],
                     )
                 )
 
-            is_emergency = rag_output.get("is_emergency", False)
+            is_emergency = bool(rag_output.get("is_emergency", False))
             guidance = rag_output.get("emergency_guidance")
-            limitations = rag_output.get("limitations", [])
+            limitations = list(rag_output.get("limitations") or [])
+            raw_error = rag_output.get("error")
+            raw_answer = rag_output.get("answer")
+            clean_answer = raw_answer.strip() if isinstance(raw_answer, str) else ""
 
-            status = "degraded" if not ollama_online else "success"
+            # Preserve distinction between:
+            # 1. Successful generation (non-empty answer, no error, Ollama online)
+            # 2. Degraded / fallback execution (Ollama offline, HTTP 500/timeout, or empty/None answer)
+            if raw_error or not ollama_online or not clean_answer:
+                status = "degraded"
+                if raw_error and not any(raw_error in lim for lim in limitations):
+                    limitations.append(str(raw_error))
+                elif not clean_answer and not raw_error:
+                    limitations.append("No explanation text was returned by the language model.")
+
+                if clean_answer:
+                    explanation = clean_answer
+                elif raw_error:
+                    explanation = (
+                        f"{DEFAULT_DEGRADED_EXPLANATION} "
+                        f"(Reason: {raw_error})"
+                    )
+                else:
+                    explanation = DEFAULT_DEGRADED_EXPLANATION
+            else:
+                status = "success"
+                explanation = clean_answer
 
             return MedicalKnowledgeAgentResult(
                 status=status,
                 query=clean_question,
-                explanation=rag_output.get("answer", "No response generated."),
+                explanation=explanation,
                 citations=citations,
                 limitations=limitations,
                 is_emergency=is_emergency,
@@ -93,16 +130,10 @@ class MedicalKnowledgeAgent:
 
         except Exception as exc:
             logger.warning("RAG pipeline graceful degradation triggered: %s", exc)
-            fallback_explanation = (
-                "Verified medical knowledge retrieval is temporarily operating in degraded mode "
-                "(vector database or inference service offline). "
-                "For health questions regarding vital measurements or medications, please consult "
-                "standard clinical guidelines and your healthcare provider."
-            )
             return MedicalKnowledgeAgentResult(
                 status="degraded",
                 query=clean_question,
-                explanation=fallback_explanation,
+                explanation=DEFAULT_DEGRADED_EXPLANATION,
                 citations=[],
                 limitations=[f"Retrieval degraded: {str(exc)}"],
                 is_emergency=False,

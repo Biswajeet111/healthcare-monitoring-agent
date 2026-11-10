@@ -1,36 +1,36 @@
-# Virtual environment
-venv/
-
 # Environment variables
 .env
+.env.*
+!.env.example
 
-# Python cache
+# Python
+venv/
+.venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
-# Database (optional: keep if you want demo data)
-# data/health.db
-# ML Models
-models/
-*.pkl
+# Frontend
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
 
-data/vector_db/
 # Local databases
 *.db
 *.sqlite
 *.sqlite3
-storage/
-.env.*
-!.env.example
-venv/
-__pycache__/
-.pytest_cache/
-*.pyc
-*.db
-*.sqlite
-*.sqlite3
+
+# ChromaDB storage
 chroma_db/
+chroma_data/
 chroma_storage/
-models/
-*.pkl
-*.joblibdata/vector_db/
+
+# Generated synthetic patient artifacts
+data/demo_hg_001/
+
+# Uploaded medical documents
+storage/medical_reports/
+
+# Logs
+*.log

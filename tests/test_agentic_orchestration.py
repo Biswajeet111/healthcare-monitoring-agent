@@ -215,6 +215,111 @@ def test_medical_knowledge_agent_graceful_degradation(client, auth_user_a, db_se
         assert len(res.limitations) > 0
 
 
+def test_medical_knowledge_agent_unavailable_ollama(client, auth_user_a, db_session):
+    """When Ollama is unavailable, run_rag_pipeline returns answer=None and an error string."""
+    user_id = auth_user_a["user_id"]
+    agent = MedicalKnowledgeAgent(db_session)
+
+    mock_rag_output = {
+        "answer": None,
+        "error": (
+            "The local AI service (Ollama) is not available. "
+            "Please ensure Ollama is running and the model 'llama3.1' is installed."
+        ),
+        "sources": [],
+        "limitations": ["Local LLM unavailable."],
+        "disclaimer": "Educational only.",
+        "is_emergency": False,
+        "emergency_guidance": None,
+    }
+    with patch("healthguard.orchestration.agents.medical_knowledge_agent.check_ollama_available", return_value=False), \
+         patch("healthguard.orchestration.agents.medical_knowledge_agent.run_rag_pipeline", return_value=mock_rag_output):
+        res = agent.query_knowledge(user_id=user_id, question="What is normal blood glucose?")
+        assert res.status == "degraded"
+        assert isinstance(res.explanation, str) and len(res.explanation) > 0
+        assert "degraded mode" in res.explanation
+        assert "Ollama" in res.explanation
+        assert any("unavailable" in lim.lower() for lim in res.limitations)
+
+
+def test_medical_knowledge_agent_ollama_http_500_error(client, auth_user_a, db_session):
+    """
+    Regression test: When check_ollama_available() succeeds (/api/tags -> 200),
+    but /api/chat fails with HTTP 500 (e.g. model load / memory error),
+    generate_answer() and MedicalKnowledgeAgent must:
+    - Not raise a Pydantic ValidationError for explanation=None
+    - Report status='degraded' (never 'success')
+    - Preserve the HTTP 500 error details and any retrieved citations
+    """
+    import httpx
+    from healthguard.rag.llm_service import generate_answer
+
+    fake_request = httpx.Request("POST", "http://localhost:11434/api/chat")
+    fake_response = httpx.Response(
+        500,
+        request=fake_request,
+        json={"error": "model requires more system memory (4.8 GiB) than is available (3.1 GiB)"},
+    )
+
+    chunks = [
+        {
+            "id": "knowledge-doc-2-chunk-0",
+            "text": "Normal fasting blood glucose is below 100 mg/dL.",
+            "metadata": {
+                "title": "Guidance on Global Monitoring for Diabetes",
+                "source_organization": "WHO",
+                "source_url": "https://www.who.int",
+            },
+            "distance": 0.25,
+        }
+    ]
+
+    with patch("healthguard.rag.llm_service.check_ollama_available", return_value=True), \
+         patch("healthguard.rag.llm_service.httpx.post", return_value=fake_response):
+        llm_out = generate_answer(question="What is normal blood glucose?", context_chunks=chunks)
+        assert llm_out["answer"] is None
+        assert "500" in llm_out["error"]
+        assert "memory" in llm_out["error"]
+        assert len(llm_out["sources"]) == 1
+        assert llm_out["sources"][0]["document_title"] == "Guidance on Global Monitoring for Diabetes"
+
+    user_id = auth_user_a["user_id"]
+    agent = MedicalKnowledgeAgent(db_session)
+    with patch("healthguard.orchestration.agents.medical_knowledge_agent.check_ollama_available", return_value=True), \
+         patch("healthguard.orchestration.agents.medical_knowledge_agent.run_rag_pipeline", return_value={
+             **llm_out,
+             "is_emergency": False,
+             "emergency_guidance": None,
+         }):
+        res = agent.query_knowledge(user_id=user_id, question="What is normal blood glucose?")
+        assert res.status == "degraded"
+        assert isinstance(res.explanation, str) and len(res.explanation) > 0
+        assert "500" in res.explanation
+        assert len(res.citations) == 1
+        assert res.citations[0].title == "Guidance on Global Monitoring for Diabetes"
+
+
+def test_medical_knowledge_agent_missing_or_empty_explanation(client, auth_user_a, db_session):
+    """Regression test: missing/None/whitespace-only answer without an explicit error still gets a valid fallback string and degraded status."""
+    user_id = auth_user_a["user_id"]
+    agent = MedicalKnowledgeAgent(db_session)
+
+    for empty_val in (None, "", "   "):
+        with patch("healthguard.orchestration.agents.medical_knowledge_agent.check_ollama_available", return_value=True), \
+             patch("healthguard.orchestration.agents.medical_knowledge_agent.run_rag_pipeline", return_value={
+                 "answer": empty_val,
+                 "sources": [],
+                 "limitations": [],
+                 "is_emergency": False,
+                 "emergency_guidance": None,
+             }):
+            res = agent.query_knowledge(user_id=user_id, question="Explain HbA1c.")
+            assert res.status == "degraded"
+            assert isinstance(res.explanation, str) and len(res.explanation.strip()) > 0
+            assert "degraded mode" in res.explanation
+            assert len(res.limitations) >= 1
+
+
 # ============================================================
 # END-TO-END WORKFLOW INTEGRATION TESTS VIA API
 # ============================================================

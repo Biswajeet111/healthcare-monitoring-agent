@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
 from healthguard.api.monitoring_events import (
     router as monitoring_events_router,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from healthguard.api.notifications import (
     router as notifications_router,
 )
@@ -88,6 +89,16 @@ app = FastAPI(
     title="HealthGuard AI",
     description="Agentic AI-Powered Personal Healthcare Intelligence Platform",
     version="1.0.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(monitoring_events_router)
 app.include_router(notifications_router)

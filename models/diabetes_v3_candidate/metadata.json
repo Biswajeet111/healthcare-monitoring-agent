@@ -1,0 +1,23 @@
+{
+  "model_version": "experimental-v3-candidate",
+  "model": "LogisticRegression",
+  "threshold": 0.3,
+  "threshold_selection": "Preselected from development-only repeated CV; not clinically validated",
+  "feature_names": [
+    "Pregnancies",
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI",
+    "DiabetesPedigreeFunction",
+    "Age"
+  ],
+  "development_rows": 614,
+  "holdout_rows_not_used": 154,
+  "source_dataset_sha256": "123ce738f394095a201da0f65c5e174cdcb19cdf5ec1535aee65e2b0e1e2aae2",
+  "created_utc": "2026-11-10T08:32:32.924745+00:00",
+  "python_version": "3.10.11",
+  "sklearn_version": "1.7.2",
+  "warning": "Experimental classification only; not a diagnosis or validated individual risk estimate."
+}

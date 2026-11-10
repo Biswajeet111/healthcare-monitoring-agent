@@ -1,0 +1,70 @@
+{
+  "created_utc": "2026-11-10T08:31:19.882361+00:00",
+  "dataset_sha256": "123ce738f394095a201da0f65c5e174cdcb19cdf5ec1535aee65e2b0e1e2aae2",
+  "sklearn_version": "1.7.2",
+  "development_rows": 614,
+  "reserved_test_rows_not_used": 154,
+  "cv": "StratifiedKFold(n_splits=5, shuffle=True, random_state=42)",
+  "threshold": 0.3,
+  "results": {
+    "LogisticRegression": {
+      "roc_auc": 0.844,
+      "brier": 0.1503,
+      "log_loss": 0.4641,
+      "threshold": 0.3,
+      "recall": 0.7804,
+      "specificity": 0.7075,
+      "precision": 0.588,
+      "confusion_matrix": [
+        [
+          283,
+          117
+        ],
+        [
+          47,
+          167
+        ]
+      ],
+      "calibration_bins": [
+        {
+          "mean_predicted": 0.0381,
+          "observed_fraction": 0.0
+        },
+        {
+          "mean_predicted": 0.0858,
+          "observed_fraction": 0.0519
+        },
+        {
+          "mean_predicted": 0.141,
+          "observed_fraction": 0.2237
+        },
+        {
+          "mean_predicted": 0.2197,
+          "observed_fraction": 0.2208
+        },
+        {
+          "mean_predicted": 0.3102,
+          "observed_fraction": 0.3377
+        },
+        {
+          "mean_predicted": 0.4413,
+          "observed_fraction": 0.4079
+        },
+        {
+          "mean_predicted": 0.669,
+          "observed_fraction": 0.6883
+        },
+        {
+          "mean_predicted": 0.8753,
+          "observed_fraction": 0.8571
+        }
+      ]
+    }
+  },
+  "limitations": [
+    "Exploratory calibration assessment on one dataset; not external validation.",
+    "Threshold 0.30 was considered during earlier development and is not independent.",
+    "Calibration bins are descriptive, not proof of clinical calibration.",
+    "Do not interpret scores as individual clinical disease probabilities."
+  ]
+}

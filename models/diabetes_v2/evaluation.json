@@ -1,0 +1,73 @@
+{
+  "model_version": "experimental-v2-candidate",
+  "created_utc": "2026-11-10T08:22:01.445820+00:00",
+  "dataset": "data\\diabetes.csv",
+  "dataset_rows": 768,
+  "split": {
+    "train": 460,
+    "validation": 154,
+    "test": 154
+  },
+  "features": [
+    "Pregnancies",
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI",
+    "DiabetesPedigreeFunction",
+    "Age"
+  ],
+  "zero_treated_as_missing": [
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI"
+  ],
+  "selection_rule": "Highest validation recall with validation specificity >= 0.70; F1 and specificity break ties",
+  "selected_model": "LogisticRegression",
+  "threshold": 0.25,
+  "validation_metrics": {
+    "accuracy": 0.7403,
+    "precision": 0.5946,
+    "recall": 0.8148,
+    "specificity": 0.7,
+    "f1": 0.6875,
+    "roc_auc": 0.8498,
+    "confusion_matrix": [
+      [
+        70,
+        30
+      ],
+      [
+        10,
+        44
+      ]
+    ]
+  },
+  "test_metrics": {
+    "accuracy": 0.7403,
+    "precision": 0.5897,
+    "recall": 0.8519,
+    "specificity": 0.68,
+    "f1": 0.697,
+    "roc_auc": 0.8167,
+    "confusion_matrix": [
+      [
+        68,
+        32
+      ],
+      [
+        8,
+        46
+      ]
+    ]
+  },
+  "limitations": [
+    "Exploratory PIMA dataset model, not clinically validated.",
+    "Decision threshold chosen for demonstration, not medical use.",
+    "Held-out test set must not be used to revise selection.",
+    "Training data and evaluation come from the same dataset/source."
+  ]
+}

@@ -640,20 +640,42 @@ def generate_answer(
         }
 
     except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        ollama_detail = ""
+        try:
+            err_json = exc.response.json()
+            if isinstance(err_json, dict) and err_json.get("error"):
+                ollama_detail = str(err_json["error"]).strip()
+        except Exception:
+            try:
+                raw_text = (exc.response.text or "").strip()
+                if raw_text:
+                    ollama_detail = raw_text[:240]
+            except Exception:
+                pass
 
-        logger.error(
-            "Ollama API error: %s",
-            exc.response.status_code,
-        )
+        if ollama_detail:
+            logger.error(
+                "Ollama API error: %s (%s)",
+                status_code,
+                ollama_detail,
+            )
+            error_msg = f"LLM API error: {status_code} ({ollama_detail})"
+        else:
+            logger.error(
+                "Ollama API error: %s",
+                status_code,
+            )
+            error_msg = f"LLM API error: {status_code}"
 
         return {
             "answer": None,
-            "error": (
-                f"LLM API error: "
-                f"{exc.response.status_code}"
-            ),
-            "sources": [],
-            "limitations": [],
+            "error": error_msg,
+            "sources": _build_sources(included_chunks),
+            "limitations": [
+                f"Local LLM generation failed with HTTP {status_code}"
+                + (f": {ollama_detail}" if ollama_detail else ".")
+            ],
             "disclaimer": DISCLAIMER,
         }
 
