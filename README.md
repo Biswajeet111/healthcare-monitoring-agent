@@ -12,6 +12,9 @@ An AI-assisted healthcare platform that combines structured health monitoring, r
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6.0-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-111111)](https://ollama.com/)
 [![Groq](https://img.shields.io/badge/Groq-Optional%20Inference-F55036)](https://groq.com/)
@@ -40,6 +43,52 @@ Its architecture emphasizes:
 - **Safety-oriented design:** Medical request screening, response validation, and escalation mechanisms reduce reliance on unrestricted LLM generation.
 
 HealthGuard AI is intended for educational, personal health-information management, and technical demonstration purposes. It is not a medical device or a substitute for professional healthcare.
+
+---
+
+## Application Interface & Screenshots
+
+HealthGuard AI provides a modern, responsive **React + TypeScript + Vite** clinical workspace (alongside a preserved Streamlit dashboard) integrated with the FastAPI backend.
+
+### 1. Overview Dashboard
+Real-time physiological snapshot across blood glucose, heart rate, blood pressure, and daily steps, paired with active monitoring alerts and today's scheduled medication doses.
+
+![Overview Dashboard](assets/Home.png)
+
+### 2. Health Analytics & Longitudinal Trends
+Interactive multi-window trend charts (`7`, `14`, `30`, and `90` days), manual physiological measurement logging, blood pressure pairing, and bulk CSV health record import.
+
+| Health Analytics Workspace | Multi-Metric Trend Visualization |
+|---|---|
+| ![Health Analytics](assets/Analytics.png) | ![Graph Trends](assets/Graph_Trends.png) |
+
+### 3. AI Medical Assistant (Clinical RAG)
+Evidence-grounded medical question answering powered by local ChromaDB vector retrieval (`all-MiniLM-L6-v2`) and Ollama (`llama3.1`), displaying numbered source citations, user document context toggles, and explicit safety notices.
+
+![AI Medical Assistant](assets/Ai-assistant.png)
+
+### 4. Medication Management & Adherence Tracking
+Structured prescription management, daily recurring schedule configuration, real-time dose confirmation (`Take` / `Skip`), and longitudinal adherence analytics.
+
+![Medication Tracker](assets/Medication.png)
+
+### 5. Agentic AI Workspace & Experimental Diabetes Screening (v3)
+Coordinated multi-agent orchestration (`Workflow A: Comprehensive Assessment`, `Workflow B: Medication Check`, `Workflow C: Health Summary`) with per-agent execution traces, audit history, and an integrated **Experimental Diabetes Screening Model (v3)** panel (`/ml/diabetes/predict-v3`).
+
+| Multi-Agent Orchestration Workspace | Experimental Diabetes Screening (v3) |
+|---|---|
+| ![Agentic AI Workspace](assets/Agent_Workspace.png) | ![Experimental Diabetes Predictor](assets/Diabetes_predictor.png) |
+
+### 6. Medical Documents, Notifications & Workspace Settings
+Private PDF clinical report upload with inline PDF viewing and isolated user vector indexing (`user_documents_<user_id>`), statistical deviation monitoring alerts, medication reminders, and live backend/RAG health diagnostics.
+
+| Medical Documents & RAG Indexing | Notifications & Monitoring Events |
+|---|---|
+| ![Medical Documents](assets/Documents.png) | ![Notifications and Alerts](assets/Notification.png) |
+
+<div align="center">
+  <img src="assets/Profile.png" alt="Workspace Settings and System Status" width="90%"/>
+</div>
 
 ---
 
@@ -141,7 +190,13 @@ The platform does not independently prescribe medication, determine dosages, or 
 
 ### Health Risk Screening
 
-HealthGuard AI includes experimental health-risk assessment functionality.
+HealthGuard AI includes experimental health-risk assessment functionality, including an **Experimental Diabetes Screening Model (`v3`)** (`/ml/diabetes/predict-v3`) integrated into both standalone screening and multi-agent assessment workflows (`/orchestration/assess` with `experimental_ml=true`).
+
+The model pipeline enforces:
+
+- SHA-256 artifact integrity verification prior to loading (`diabetes_model_v3.pkl`).
+- Physiological input range validation and zero-as-missing clinical imputation.
+- Engineered interaction features (`BMI_Age`, `Glucose_BMI`, `Insulin_Resistance_Proxy`) and recall-oriented threshold evaluation (`0.40`).
 
 These assessments are designed for informational screening and technical exploration.
 
@@ -162,10 +217,14 @@ HealthGuard AI follows a modular architecture that separates presentation, API s
 ```text
                          HEALTHGUARD AI
                                |
-                    +----------------------+
-                    |   User Interface     |
-                    |  Streamlit Dashboard |
-                    +----------------------+
+          +---------------------+---------------------+
+          |                                           |
++-----------------------+                   +----------------------+
+|    React Frontend     |                   |  Streamlit Dashboard |
+| TypeScript / Vite UI  |                   |   Python UI Client   |
++-----------------------+                   +----------------------+
+          |                                           |
+          +---------------------+---------------------+
                                |
                                v
                     +----------------------+
@@ -230,19 +289,21 @@ The separation of services allows individual components to be tested, maintained
 
 | Layer | Technology |
 |---|---|
-| Programming Language | Python 3.10 |
+| Programming Languages | Python 3.10+, TypeScript 5.6 |
 | Backend Framework | FastAPI |
 | API Server | Uvicorn |
-| Dashboard | Streamlit |
+| Web Frontend | React 18, Vite 6, Recharts, Lucide React |
+| Secondary Dashboard | Streamlit |
 | Database | SQLite |
 | ORM | SQLAlchemy |
 | Database Migrations | Alembic |
-| Authentication | JWT-based authentication |
+| Authentication | JWT-based authentication (`Bearer` token) |
 | Vector Database | ChromaDB |
 | Embedding Model | Sentence Transformers — `all-MiniLM-L6-v2` |
 | Local LLM | Ollama with Llama 3.1 |
 | Optional Cloud Inference | Groq API |
-| HTTP Client | HTTPX |
+| Experimental ML Screening | Scikit-Learn, Joblib (SHA-256 verified pipeline) |
+| HTTP Client | HTTPX / Fetch API |
 | Testing | Pytest |
 | AI Architecture | Retrieval-Augmented Generation and Multi-Agent Orchestration |
 
@@ -384,6 +445,7 @@ Users experiencing a possible medical emergency should contact local emergency s
 Install the following:
 
 - Python 3.10 or a compatible project environment.
+- Node.js 18+ and npm (for the React + Vite frontend).
 - Git.
 - Ollama for local AI inference.
 - A supported operating system.
@@ -487,15 +549,33 @@ Interactive API documentation:
 http://127.0.0.1:8000/docs
 ```
 
-### 8. Start the Dashboard
+### 8. Start the User Interface
 
-Open another terminal:
+#### Option A: React + TypeScript Frontend (Recommended)
+
+Open a new terminal in the `frontend` directory:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Access the React workspace at:
+
+```text
+http://127.0.0.1:5173
+```
+
+#### Option B: Streamlit Dashboard
+
+Alternatively, run the preserved Streamlit dashboard in another terminal:
 
 ```bash
 python -m streamlit run healthguard/dashboard/app.py --server.port 8501
 ```
 
-Access the dashboard at:
+Access the Streamlit dashboard at:
 
 ```text
 http://localhost:8501
@@ -521,6 +601,21 @@ python -m scripts.repair_global_rag_index
 
 The vector database is maintained locally and is not required to be committed to Git.
 
+### 10. Synthetic Patient Scenario (`HG-DEMO-001`)
+
+For repeatable end-to-end demonstrations without modifying real user accounts, the repository includes an automated synthetic patient generator (`scripts/setup_demo_hg_demo_001.py`) that populates a 14-day physiological measurement history, generates and indexes a synthetic clinical laboratory report PDF, configures a medication schedule with adherence records, and executes multi-agent orchestration workflows:
+
+```bash
+# Provision or refresh the synthetic demo patient (idempotent)
+python scripts/setup_demo_hg_demo_001.py --setup
+
+# Run read-only verification against the synthetic demo patient
+python scripts/setup_demo_hg_demo_001.py --verify
+
+# Safely remove only the HG-DEMO-001 synthetic account and its records
+python scripts/setup_demo_hg_demo_001.py --reset
+```
+
 ---
 
 ## Testing and Verification
@@ -536,7 +631,14 @@ python -m pytest tests/ -q
 Latest local test result:
 
 ```text
-363 passed in 67.41s
+366 passed
+```
+
+Verify the React + TypeScript frontend production bundle:
+
+```bash
+cd frontend
+npm run build
 ```
 
 The test suite covers implemented application behavior, including backend functionality and agentic orchestration.

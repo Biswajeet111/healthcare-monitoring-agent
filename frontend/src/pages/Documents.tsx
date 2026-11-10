@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Database, FileText, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
-import { deleteDocument, errorMessage, fmtDateTime, indexDocument, listDocuments, uploadDocument, type MedicalDocument, type UserProfile } from '../api';
+import { CheckCircle2, Database, ExternalLink, FileText, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { deleteDocument, errorMessage, fmtDateTime, indexDocument, listDocuments, openDocumentFile, uploadDocument, type MedicalDocument, type UserProfile } from '../api';
 import { Alert, Badge, ConfirmButton, Empty, Spinner } from '../components/ui';
 
 function fmtSize(bytes: number): string {
@@ -13,6 +13,7 @@ export default function Documents({ user }: { user: UserProfile | null }) {
   const [docs, setDocs] = useState<MedicalDocument[] | null>(null);
   const [uploading, setUploading] = useState(false);
   const [indexingId, setIndexingId] = useState<number | null>(null);
+  const [openingId, setOpeningId] = useState<number | null>(null);
   const [msg, setMsg] = useState<{ kind: 'success' | 'error' | 'warn'; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -56,6 +57,17 @@ export default function Documents({ user }: { user: UserProfile | null }) {
     finally { setIndexingId(null); }
   }
 
+  async function onOpen(doc: MedicalDocument) {
+    setOpeningId(doc.id); setMsg(null);
+    try {
+      await openDocumentFile(doc.id, doc.filename);
+    } catch (e) {
+      setMsg({ kind: 'error', text: errorMessage(e, 'Could not open PDF document') });
+    } finally {
+      setOpeningId(null);
+    }
+  }
+
   async function onDelete(doc: MedicalDocument) {
     setMsg(null);
     try {
@@ -81,11 +93,21 @@ export default function Documents({ user }: { user: UserProfile | null }) {
         {docs.map(d => <div className="list-row doc-row" key={d.id}>
           <span className="feature-icon blue"><FileText size={18} /></span>
           <div>
-            <b>{d.filename}</b>
+            <b>
+              <button
+                type="button"
+                onClick={() => void onOpen(d)}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit', fontWeight: 600, cursor: 'pointer', textAlign: 'left', textDecoration: 'underline', textUnderlineOffset: '3px' }}
+                title="Open PDF in new tab"
+              >
+                {d.filename}
+              </button>
+            </b>
             <small>{fmtSize(d.file_size)} · Uploaded {fmtDateTime(d.uploaded_at)}{d.chunk_count != null ? ` · ${d.chunk_count} chunks` : ''}{!d.has_extracted_text ? ' · No extractable text' : ''}</small>
           </div>
           <Badge value={d.index_status} />
           <div className="row-actions">
+            <button type="button" className="btn btn-ghost small" disabled={openingId === d.id} onClick={() => void onOpen(d)}><ExternalLink size={13} />{openingId === d.id ? 'Opening…' : 'Open PDF'}</button>
             {d.has_extracted_text && <button type="button" className="btn btn-ghost small" disabled={indexingId === d.id} onClick={() => void onIndex(d)}><Database size={13} />{indexingId === d.id ? 'Indexing…' : d.index_status === 'indexed' ? 'Re-index' : 'Index'}</button>}
             <ConfirmButton className="btn btn-danger small" label={<><Trash2 size={13} /> Delete</>} confirmLabel="Confirm delete" onConfirm={() => onDelete(d)} />
           </div>

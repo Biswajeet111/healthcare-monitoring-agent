@@ -244,6 +244,48 @@ export function uploadDocument(file: File) {
 export const indexDocument = (id: number) => request<Record<string, unknown>>(`/rag/documents/${id}/index`, { method: 'POST' });
 export const deleteDocument = (id: number) => request<{ message: string }>(`/documents/${id}`, { method: 'DELETE' });
 
+export async function openDocumentFile(id: number, filename?: string): Promise<void> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(`/documents/${id}/file`), { method: 'GET', headers });
+  } catch {
+    throw new ApiError(0, `Cannot reach backend at ${API_BASE}. Is FastAPI running?`);
+  }
+
+  if (response.status === 401) {
+    logout();
+    unauthorizedListeners.forEach(fn => fn());
+    throw new ApiError(401, 'Session expired. Please sign in again.');
+  }
+
+  if (!response.ok) {
+    const raw = await response.text();
+    let parsed: unknown = null;
+    if (raw) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
+    const detail = parsed && typeof parsed === 'object' && 'detail' in parsed ? formatDetail((parsed as { detail: unknown }).detail) : null;
+    throw new ApiError(response.status, detail || `Could not open document (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+  const blobUrl = URL.createObjectURL(pdfBlob);
+  const win = window.open(blobUrl, '_blank', 'noopener,noreferrer');
+  if (!win) {
+    // Fallback if popup blocker prevents window.open
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename || `document_${id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+}
+
 // ---------------------------------------------------------------------------
 // Notifications & monitoring events
 // ---------------------------------------------------------------------------
