@@ -1,0 +1,121 @@
+Folder PATH listing for volume New Volume
+Volume serial number is 2CC8-EEF8
+F:\HEALTHCARE-AI-AGENT\HEALTHGUARD
+|   main.py
+|   schemas.py
+|   __init__.py
+|   
++---agents
+|   |   monitoring_agent.py
+|   |   monitoring_event_classifier.py
+|   |   monitoring_event_deduplicator.py
+|   |   monitoring_orchestrator.py
+|   |   monitoring_safety.py
+|   |   monitoring_trigger.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           monitoring_agent.cpython-310.pyc
+|           monitoring_event_classifier.cpython-310.pyc
+|           monitoring_event_deduplicator.cpython-310.pyc
+|           monitoring_orchestrator.cpython-310.pyc
+|           monitoring_safety.cpython-310.pyc
+|           monitoring_trigger.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
++---analytics
+|   |   longitudinal_analyzer.py
+|   |   trend_analyzer.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           longitudinal_analyzer.cpython-310.pyc
+|           trend_analyzer.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
++---api
+|   |   monitoring_events.py
+|   |   notifications.py
+|   |   
+|   \---__pycache__
+|           monitoring_events.cpython-310.pyc
+|           notifications.cpython-310.pyc
+|           
++---core
+|   |   config.py
+|   |   dependencies.py
+|   |   security.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           config.cpython-310.pyc
+|           dependencies.cpython-310.pyc
+|           security.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
++---dashboard
+|   |   app.py
+|   |   
+|   \---__pycache__
+|           app.cpython-310.pyc
+|           
++---database
+|   |   base.py
+|   |   models.py
+|   |   monitoring_event_repository.py
+|   |   session.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           base.cpython-310.pyc
+|           models.cpython-310.pyc
+|           monitoring_event_repository.cpython-310.pyc
+|           session.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
++---ml
+|   |   assess_diabetes_finalists.py
+|   |   audit_diabetes_calibration.py
+|   |   diabetes_predictor.py
+|   |   diabetes_v3_predictor.py
+|   |   evaluate_diabetes.py
+|   |   finalize_diabetes_candidate.py
+|   |   model_integrity.py
+|   |   train_diabetes.py
+|   |   validate_diabetes.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           assess_diabetes_finalists.cpython-310.pyc
+|           audit_diabetes_calibration.cpython-310.pyc
+|           diabetes_predictor.cpython-310.pyc
+|           diabetes_v3_predictor.cpython-310.pyc
+|           evaluate_diabetes.cpython-310.pyc
+|           finalize_diabetes_candidate.cpython-310.pyc
+|           model_integrity.cpython-310.pyc
+|           train_diabetes.cpython-310.pyc
+|           validate_diabetes.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
++---rag
+|       __init__.py
+|       
++---services
+|   |   csv_service.py
+|   |   document_service.py
+|   |   normalization.py
+|   |   notification_service.py
+|   |   __init__.py
+|   |   
+|   \---__pycache__
+|           csv_service.cpython-310.pyc
+|           document_service.cpython-310.pyc
+|           normalization.cpython-310.pyc
+|           notification_service.cpython-310.pyc
+|           __init__.cpython-310.pyc
+|           
+\---__pycache__
+        main.cpython-310.pyc
+        schemas.cpython-310.pyc
+        __init__.cpython-310.pyc
+        

@@ -2,12 +2,27 @@ from collections import defaultdict
 from datetime import datetime, time
 from uuid import uuid4
 import hashlib
+import math
 from sqlalchemy.exc import IntegrityError
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from healthguard.api.monitoring_events import (
+    router as monitoring_events_router,
+)
+from healthguard.api.notifications import (
+    router as notifications_router,
+)
+from healthguard.api.medication_management import (
+    router as medication_management_router,
+)
+from healthguard.api.medication_reminders import (
+    router as medication_reminders_router,
+)
+from healthguard.api.medical_rag import (
+    router as medical_rag_router,
+)
 from sqlalchemy.orm import Session
 from healthguard.services.csv_service import parse_health_csv
-from fastapi import UploadFile, File
 from healthguard.database.models import MedicalDocument
 from healthguard.services.document_service import process_medical_pdf
 from healthguard.schemas import MedicalDocumentResponse
@@ -17,12 +32,40 @@ from healthguard.core.security import (
     hash_password,
     verify_password,
 )
+from fastapi import Query
+
+from healthguard.agents.monitoring_trigger import trigger_monitoring_for_metric
+from healthguard.services.notification_service import (
+    process_in_app_notification,
+)
+from healthguard.agents.monitoring_orchestrator import (
+    run_monitoring_pipeline,
+    MonitoringOrchestrationError,
+)
+from healthguard.analytics.longitudinal_analyzer import (
+    analyze_longitudinal_health,
+    LongitudinalAnalysisError,
+)
+from healthguard.analytics.trend_analyzer import (
+    analyze_health_trend,
+    TrendAnalysisError,
+)
+import logging
+from healthguard.schemas import DiabetesPredictionV3Response
+
+from healthguard.ml.diabetes_v3_predictor import (
+    predict_diabetes_v3,
+)
+
+from healthguard.ml.diabetes_predictor import predict_diabetes
 from healthguard.services.normalization import normalize_measurement
 from healthguard.database import models
 from healthguard.database.models import Medication, MedicationLog
 from healthguard.database.session import get_db
 from healthguard.schemas import (
     BloodPressureCreate,
+    DiabetesPredictionRequest,
+    DiabetesPredictionResponse,
     HealthMetricCreate,
     HealthMetricResponse,
     MedicationCreate,
@@ -36,13 +79,34 @@ from healthguard.schemas import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="HealthGuard AI",
     description="Agentic AI-Powered Personal Healthcare Intelligence Platform",
     version="1.0.0",
 )
+app.include_router(monitoring_events_router)
+app.include_router(notifications_router)
+app.include_router(medication_management_router)
+app.include_router(medication_reminders_router)
+app.include_router(medical_rag_router)
 
 
+# Start medication reminder worker on startup
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    from healthguard.services.medication_reminder_service import (
+        start_reminder_worker,
+        stop_reminder_worker,
+    )
+    start_reminder_worker()
+    yield
+    stop_reminder_worker()
+
+app.router.lifespan_context = lifespan
 def verify_user_access(
     requested_user_id: int,
     current_user: models.UserProfile,
@@ -166,6 +230,72 @@ def get_my_profile(
 
 
 # ---------------------------------------------------------------------------
+# Best-effort monitoring after successful measurement persistence
+# ---------------------------------------------------------------------------
+
+def _run_post_save_monitoring(
+    db: Session,
+    user_id: int,
+    metric_ids: list[int],
+) -> None:
+    """Persist monitoring events, then publish eligible in-app notifications.
+
+    Measurements are committed before this function is called.
+    Monitoring and publication use separate transactions. Processing is
+    synchronous and best-effort; durable retries are not implemented yet.
+    """
+    for metric_id in metric_ids:
+        try:
+            result = trigger_monitoring_for_metric(
+                db=db,
+                user_id=user_id,
+                metric_id=metric_id,
+            )
+            db.commit()
+            logger.info(
+                "Monitoring trigger finished: user_id=%s metric_id=%s status=%s",
+                user_id,
+                metric_id,
+                result.get("trigger_status"),
+            )
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "Monitoring trigger failed after measurement commit: "
+                "user_id=%s metric_id=%s",
+                user_id,
+                metric_id,
+            )
+            continue
+
+        event_id = result.get("event_id")
+        if event_id is None or result.get("notification_status") != "pending":
+            continue
+
+        try:
+            notification_result = process_in_app_notification(
+                db=db,
+                user_id=user_id,
+                event_id=event_id,
+            )
+            db.commit()
+            logger.info(
+                "In-app notification processed: user_id=%s event_id=%s status=%s",
+                user_id,
+                event_id,
+                notification_result.get("status"),
+            )
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "In-app notification publication failed: "
+                "user_id=%s event_id=%s",
+                user_id,
+                event_id,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Health metrics
 # ---------------------------------------------------------------------------
 
@@ -206,8 +336,9 @@ def create_metric(
     db.commit()
     db.refresh(new_metric)
 
-    return new_metric
+    _run_post_save_monitoring(db, current_user.id, [new_metric.id])
 
+    return new_metric
 
 
 @app.get(
@@ -263,7 +394,432 @@ def get_user_metrics(
         .all()
     )
 
+# ---------------------------------------------------------------------------
+# Longitudinal health trend analysis
+# ---------------------------------------------------------------------------
 
+@app.get("/users/{user_id}/metrics/{metric_type}/trend")
+def get_health_metric_trend(
+    user_id: int,
+    metric_type: str,
+    limit: int = 100,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Analyze historical measurements for one authenticated patient.
+
+    Returns descriptive statistics only.
+    Does not provide medical diagnoses.
+    """
+
+    verify_user_access(user_id, current_user)
+
+    allowed_metric_types = {
+        "blood_pressure_systolic",
+        "blood_pressure_diastolic",
+        "blood_glucose",
+        "heart_rate",
+        "weight",
+        "height",
+        "steps",
+        "sleep_duration",
+    }
+
+    if metric_type not in allowed_metric_types:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported metric type",
+        )
+
+    if limit < 2 or limit > 500:
+        raise HTTPException(
+            status_code=422,
+            detail="Limit must be between 2 and 500",
+        )
+
+    metrics = (
+        db.query(models.HealthMetric)
+        .filter(
+            models.HealthMetric.user_id == current_user.id,
+            models.HealthMetric.metric_type == metric_type,
+        )
+        .order_by(
+            models.HealthMetric.recorded_at.desc(),
+            models.HealthMetric.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+    if len(metrics) < 2:
+        return {
+            "user_id": current_user.id,
+            "metric_type": metric_type,
+            "total_readings": len(metrics),
+            "message": "At least two readings are required",
+            "unit_trends": [],
+        }
+
+    # Never combine incompatible units.
+    grouped_metrics = defaultdict(list)
+
+    for metric in metrics:
+        grouped_metrics[metric.unit].append(metric)
+
+    unit_trends = []
+
+    for unit, unit_metrics in grouped_metrics.items():
+
+        if len(unit_metrics) < 2:
+            continue
+
+        readings = [
+            {
+                "recorded_at": metric.recorded_at.isoformat(),
+                "value": metric.value,
+            }
+            for metric in unit_metrics
+        ]
+
+        try:
+            analysis = analyze_health_trend(readings)
+
+        except (TrendAnalysisError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Stored health measurements cannot be analyzed",
+            ) from exc
+
+        unit_trends.append({
+            "unit": unit,
+            **analysis,
+        })
+
+    return {
+        "user_id": current_user.id,
+        "metric_type": metric_type,
+        "total_readings": len(metrics),
+        "unit_trends": unit_trends,
+        "disclaimer": (
+            "This analysis describes recorded measurements "
+            "and does not establish a medical diagnosis."
+        ),
+    }
+
+@app.get("/users/{user_id}/metrics/{metric_type}/longitudinal")
+def get_longitudinal_health_analysis(
+    user_id: int,
+    metric_type: str,
+    baseline_window: int = 5,
+    recent_window: int = 3,
+    anomaly_threshold: float = 2.0,
+    limit: int = 200,
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_user_access(user_id, current_user)
+
+    allowed_metric_types = {
+        "blood_pressure_systolic",
+        "blood_pressure_diastolic",
+        "blood_glucose",
+        "heart_rate",
+        "weight",
+        "height",
+        "steps",
+        "sleep_duration",
+    }
+
+    if metric_type not in allowed_metric_types:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported metric type",
+        )
+
+    if (
+        baseline_window < 2
+        or recent_window < 1
+        or baseline_window + recent_window > 500
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid analysis windows",
+        )
+
+    if (
+        not math.isfinite(anomaly_threshold)
+        or anomaly_threshold <= 0
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid anomaly threshold",
+        )
+
+    if limit < 3 or limit > 500:
+        raise HTTPException(
+            status_code=422,
+            detail="Limit must be between 3 and 500",
+        )
+
+    if baseline_window + recent_window > limit:
+        raise HTTPException(
+            status_code=422,
+            detail="Analysis windows exceed reading limit",
+        )
+
+    metrics = (
+        db.query(models.HealthMetric)
+        .filter(
+            models.HealthMetric.user_id == current_user.id,
+            models.HealthMetric.metric_type == metric_type,
+        )
+        .order_by(
+            models.HealthMetric.recorded_at.desc(),
+            models.HealthMetric.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+    grouped_metrics = defaultdict(list)
+
+    for metric in metrics:
+        grouped_metrics[metric.unit].append(metric)
+
+    unit_analyses = []
+
+    required_readings = baseline_window + recent_window
+
+    for unit, unit_metrics in grouped_metrics.items():
+        if len(unit_metrics) < required_readings:
+            continue
+
+        readings = [
+            {
+                "id": metric.id,
+                "recorded_at": metric.recorded_at.isoformat(),
+                "value": metric.value,
+            }
+        for metric in unit_metrics
+    ]
+
+        try:
+            analysis = analyze_longitudinal_health(
+                readings,
+                baseline_window=baseline_window,
+                recent_window=recent_window,
+                anomaly_threshold=anomaly_threshold,
+            )
+        except LongitudinalAnalysisError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Stored measurements cannot be analyzed",
+            ) from exc
+
+        unit_analyses.append({
+            "unit": unit,
+            **analysis,
+        })
+
+    return {
+        "user_id": current_user.id,
+        "metric_type": metric_type,
+        "total_readings": len(metrics),
+        "required_readings": required_readings,
+        "unit_analyses": unit_analyses,
+        "message": (
+            None
+            if unit_analyses
+            else "Insufficient compatible readings for analysis"
+        ),
+        "disclaimer": (
+            "Statistical deviations are not medical diagnoses "
+            "or validated clinical risk assessments."
+        ),
+    }
+# ============================================================
+# HEALTH MONITORING AGENT API
+# ============================================================
+
+@app.get("/users/{user_id}/metrics/{metric_type}/monitoring")
+def get_health_monitoring_report(
+    user_id: int,
+    metric_type: str,
+    baseline_window: int = Query(default=5, ge=2, le=499),
+    recent_window: int = Query(default=3, ge=1, le=499),
+    anomaly_threshold: float = Query(default=2.0, gt=0),
+    limit: int = Query(default=200, ge=3, le=500),
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Run authenticated, deterministic health monitoring.
+
+    The endpoint:
+    - Enforces user ownership.
+    - Retrieves the user's recorded measurements.
+    - Separates incompatible measurement units.
+    - Runs longitudinal analysis and monitoring decisions.
+    - Validates generated decisions through the safety layer.
+    - Returns non-diagnostic monitoring reports.
+
+    No database writes or external AI services.
+    """
+
+    # --------------------------------------------------------
+    # 1. Authentication and authorization
+    # --------------------------------------------------------
+
+    verify_user_access(user_id, current_user)
+
+    # --------------------------------------------------------
+    # 2. Validate requested metric
+    # --------------------------------------------------------
+
+    allowed_metric_types = {
+        "blood_pressure_systolic",
+        "blood_pressure_diastolic",
+        "blood_glucose",
+        "heart_rate",
+        "weight",
+        "height",
+        "steps",
+        "sleep_duration",
+    }
+
+    if metric_type not in allowed_metric_types:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported metric type.",
+        )
+
+    if baseline_window + recent_window > limit:
+        raise HTTPException(
+            status_code=422,
+            detail="Analysis windows exceed reading limit.",
+        )
+
+    if not math.isfinite(anomaly_threshold):
+        raise HTTPException(
+            status_code=422,
+            detail="Anomaly threshold must be finite.",
+        )
+
+    # --------------------------------------------------------
+    # 3. Fetch the user's latest measurements
+    # --------------------------------------------------------
+
+    metrics = (
+        db.query(models.HealthMetric)
+        .filter(
+            models.HealthMetric.user_id == current_user.id,
+            models.HealthMetric.metric_type == metric_type,
+        )
+        .order_by(
+            models.HealthMetric.recorded_at.desc(),
+            models.HealthMetric.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+    # --------------------------------------------------------
+    # 4. Group measurements by unit
+    # --------------------------------------------------------
+
+    grouped_metrics = defaultdict(list)
+
+    for metric in metrics:
+        grouped_metrics[metric.unit].append(metric)
+
+    required_readings = baseline_window + recent_window
+
+    reports = []
+    insufficient_units = []
+
+    # --------------------------------------------------------
+    # 5. Execute monitoring pipeline for each unit
+    # --------------------------------------------------------
+
+    for unit, unit_metrics in sorted(
+        grouped_metrics.items(),
+        key=lambda item: str(item[0]),
+    ):
+
+        if len(unit_metrics) < required_readings:
+            insufficient_units.append({
+                "unit": unit,
+                "available_readings": len(unit_metrics),
+                "required_readings": required_readings,
+            })
+            continue
+
+        # Sort chronologically, using database ID as the
+        # deterministic tie-breaker for equal timestamps.
+        chronological_metrics = sorted(
+            unit_metrics,
+            key=lambda metric: (
+                metric.recorded_at,
+                metric.id,
+            ),
+        )
+
+        readings = [
+            {
+                "id": metric.id,
+                "recorded_at": metric.recorded_at.isoformat(),
+                "value": metric.value,
+            }
+            for metric in chronological_metrics
+        ]
+
+        try:
+            report = run_monitoring_pipeline(
+                metric_type=metric_type,
+                unit=unit,
+                readings=readings,
+                baseline_window=baseline_window,
+                recent_window=recent_window,
+                anomaly_threshold=anomaly_threshold,
+            )
+
+        except MonitoringOrchestrationError as exc:
+            # Do not expose stored health values or internal
+            # implementation details through error messages.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Stored measurements could not be "
+                    "processed safely."
+                ),
+            ) from exc
+
+        reports.append(report)
+
+    # --------------------------------------------------------
+    # 6. Return structured monitoring results
+    # --------------------------------------------------------
+
+    return {
+        "user_id": current_user.id,
+        "metric_type": metric_type,
+        "total_readings": len(metrics),
+        "required_readings": required_readings,
+        "reports": reports,
+        "insufficient_units": insufficient_units,
+        "message": (
+            None
+            if reports
+            else "Insufficient compatible readings for monitoring."
+        ),
+        "disclaimer": (
+            "Monitoring priorities indicate statistical "
+            "data-review attention only, not medical urgency. "
+            "These results do not diagnose conditions, "
+            "establish medical safety, or recommend treatment."
+        ),
+    }
 @app.get("/users/{user_id}/metrics/analytics")
 def get_metric_analytics(
     user_id: int,
@@ -379,6 +935,11 @@ def create_blood_pressure(
             status_code=500,
             detail="Failed to save blood pressure readings",
         )
+
+    # Run separately for each metric type after both measurements are saved.
+    _run_post_save_monitoring(
+        db, current_user.id, [systolic.id, diastolic.id]
+    )
 
     return {
         "message": "Blood pressure recorded successfully",
@@ -760,6 +1321,21 @@ async def upload_medical_document(
         db.add(document)
         db.commit()
         db.refresh(document)
+
+        # Index document for RAG retrieval if text was extracted
+        if document.extracted_text:
+            try:
+                from healthguard.rag.document_ingestion import ingest_user_document
+                ingest_user_document(db, document.id, current_user.id)
+                db.commit()
+            except Exception as idx_err:
+                logger.warning(
+                    "Background RAG indexing failed for doc %s: %s",
+                    document.id,
+                    idx_err,
+                )
+                db.rollback()
+
         return document
     except Exception:
         db.rollback()
@@ -812,10 +1388,32 @@ def delete_medical_document(
             detail="Invalid document storage path"
         )
 
+    # 1. Clean up associated ChromaDB embeddings & status
+    try:
+        from healthguard.rag.document_ingestion import delete_user_document_index
+        delete_user_document_index(db, document_id, current_user.id)
+    except Exception as cleanup_err:
+        logger.warning(
+            "Vector index cleanup failed for doc %s: %s",
+            document_id,
+            cleanup_err,
+        )
+
+    # 2. Check if any other record references this physical file
+    other_references = (
+        db.query(MedicalDocument)
+        .filter(
+            MedicalDocument.stored_path == document.stored_path,
+            MedicalDocument.id != document_id,
+        )
+        .count()
+    )
+
     db.delete(document)
     db.commit()
 
-    if stored_path.is_file():
+    # Only unlink if no other database record references this physical file
+    if other_references == 0 and stored_path.is_file():
         stored_path.unlink()
 
     return {
@@ -915,3 +1513,78 @@ async def import_health_csv(
         "import_hash": file_hash,
         "errors": result["errors"]
     }
+
+# ---------------------------------------------------------------------------
+# Experimental ML screening
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/ml/diabetes/predict",
+    response_model=DiabetesPredictionResponse,
+    tags=["Machine Learning"],
+)
+def diabetes_prediction_endpoint(
+    payload: DiabetesPredictionRequest,
+    current_user: models.UserProfile = Depends(get_current_user),
+):
+    """Experimental diabetes screening; not a clinical diagnosis."""
+    try:
+        return predict_diabetes(payload.model_dump())
+    except (FileNotFoundError, ValueError):
+        logger.exception("Diabetes screening model unavailable or invalid")
+        raise HTTPException(
+            status_code=503,
+            detail="Diabetes screening service is unavailable",
+        )
+    except Exception:
+        logger.exception("Unexpected diabetes screening failure")
+        raise HTTPException(
+            status_code=503,
+            detail="Diabetes screening service is unavailable",
+        )
+
+@app.post(
+    "/ml/diabetes/predict-v3",
+    response_model=DiabetesPredictionV3Response,
+    tags=["Machine Learning"],
+)
+def diabetes_prediction_v3(
+    payload: DiabetesPredictionRequest,
+    current_user=Depends(get_current_user),
+):
+    """Authenticated experimental diabetes screening (v3)."""
+
+    try:
+        return predict_diabetes_v3(
+            payload.model_dump()
+        )
+
+    except ValueError as exc:
+        # Input validation errors must be distinguished
+        # from model configuration failures.
+        message = str(exc)
+
+        input_errors = (
+            "Missing features",
+            "Unexpected features",
+            "must be",
+            "cannot be negative",
+            "must be greater than zero",
+        )
+
+        if any(error in message for error in input_errors):
+            raise HTTPException(
+                status_code=422,
+                detail=message,
+            ) from exc
+
+        raise HTTPException(
+            status_code=503,
+            detail="Diabetes screening service is unavailable",
+        ) from exc
+
+    except (FileNotFoundError, OSError, KeyError, TypeError):
+        raise HTTPException(
+            status_code=503,
+            detail="Diabetes screening service is unavailable",
+        )

@@ -1,6 +1,10 @@
 from datetime import date, datetime
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class HealthMetricCreate(BaseModel):
     metric_type: Literal[
@@ -159,3 +163,31 @@ class MedicalDocumentResponse(BaseModel):
     uploaded_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class DiabetesPredictionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    Pregnancies: int = Field(ge=0, le=25)
+    Glucose: float = Field(ge=0, le=600, allow_inf_nan=False)
+    BloodPressure: float = Field(ge=0, le=250, allow_inf_nan=False)
+    SkinThickness: float = Field(ge=0, le=100, allow_inf_nan=False)
+    Insulin: float = Field(ge=0, le=1000, allow_inf_nan=False)
+    BMI: float = Field(ge=0, le=100, allow_inf_nan=False)
+    DiabetesPedigreeFunction: float = Field(
+        ge=0,
+        le=5,
+        allow_inf_nan=False,
+    )
+    Age: int = Field(ge=1, le=120)
+
+
+class DiabetesPredictionResponse(BaseModel):
+    prediction: int
+    model_score: float
+    screening_result: str
+    model: str
+    model_version: str
+    disclaimer: str
+
+class DiabetesPredictionV3Response(DiabetesPredictionResponse):
+    threshold: float
