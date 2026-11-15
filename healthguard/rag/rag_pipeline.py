@@ -125,6 +125,7 @@ def run_rag_pipeline(
     include_user_documents: bool = True,
     include_global_knowledge: bool = True,
     document_id: Optional[int] = None,
+    max_tokens: Optional[int] = None,
 ) -> dict:
     """
     Full RAG pipeline execution.
@@ -198,6 +199,7 @@ def run_rag_pipeline(
         question=question,
         context_chunks=all_chunks,
         personal_context=personal_context,
+        max_tokens=max_tokens,
     )
 
     if llm_result.get("error"):

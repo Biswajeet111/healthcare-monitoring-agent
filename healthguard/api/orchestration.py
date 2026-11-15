@@ -25,6 +25,8 @@ from healthguard.orchestration.orchestrator import AgenticOrchestrator
 from healthguard.orchestration.schemas import (
     AgentExecutionAuditResponse,
     ConsolidatedHealthSummaryResponse,
+    DynamicWorkflowRequest,
+    ExecutionStepLog,
     MedicationCheckRequest,
     RunAssessmentRequest,
 )
@@ -124,6 +126,38 @@ def run_medication_check(
     return result
 
 
+@router.post(
+    "/execute",
+    response_model=ConsolidatedHealthSummaryResponse,
+    summary="Execute a dynamic, iterative agentic workflow for a user health request",
+)
+def run_dynamic_agentic_workflow(
+    request: DynamicWorkflowRequest,
+    user_id: Optional[int] = Query(None, description="Target user ID (must match authenticated user)"),
+    current_user: models.UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Execute an iterative Decision -> Execution -> Observation loop that dynamically
+    selects allowlisted agent tools based on the user's request, minimal context,
+    and actual intermediate tool results.
+    """
+    target_user_id = user_id if user_id is not None else current_user.id
+    _verify_user_ownership(target_user_id, current_user)
+
+    orchestrator = AgenticOrchestrator(db)
+    result = orchestrator.run_dynamic_workflow(
+        user_id=target_user_id,
+        query=request.query,
+        preferred_metric=request.metric_type,
+        max_steps=request.max_steps,
+        experimental_ml=request.experimental_ml,
+        ml_features=request.ml_features,
+        allow_notification_delivery=request.allow_notification_delivery,
+    )
+    return result
+
+
 @router.get(
     "/history",
     response_model=list[AgentExecutionAuditResponse],
@@ -152,10 +186,42 @@ def get_agent_execution_history(
     history = []
     for rec in records:
         summary_str = None
+        user_req = None
+        planner_mode = None
+        selected_agents: list[str] = []
+        steps_list: list[ExecutionStepLog] = []
+
+        if rec.input_payload:
+            try:
+                inp = json.loads(rec.input_payload)
+                if isinstance(inp, dict):
+                    user_req = inp.get("query")
+                    planner_mode = inp.get("planner_mode")
+            except Exception:
+                pass
+
+        if rec.execution_steps:
+            try:
+                raw_steps = json.loads(rec.execution_steps)
+                if isinstance(raw_steps, list):
+                    for s in raw_steps:
+                        if isinstance(s, dict):
+                            steps_list.append(ExecutionStepLog(**s))
+                            ag = s.get("agent_name")
+                            if ag and ag not in selected_agents:
+                                selected_agents.append(str(ag))
+            except Exception:
+                pass
+
         if rec.result_summary:
             try:
                 data = json.loads(rec.result_summary)
-                summary_str = data.get("summary_text")
+                if isinstance(data, dict):
+                    summary_str = data.get("summary_text")
+                    user_req = user_req or data.get("user_request")
+                    planner_mode = planner_mode or data.get("planner_mode")
+                    if data.get("selected_agents") and not selected_agents:
+                        selected_agents = [str(a) for a in data["selected_agents"]]
             except Exception:
                 summary_str = rec.result_summary[:200]
 
@@ -171,6 +237,10 @@ def get_agent_execution_history(
                 duration_ms=rec.duration_ms,
                 summary=summary_str,
                 error_message=rec.error_message,
+                user_request=user_req,
+                planner_mode=planner_mode,
+                selected_agents=selected_agents,
+                execution_steps=steps_list,
             )
         )
     return history

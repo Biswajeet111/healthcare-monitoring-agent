@@ -463,9 +463,15 @@ export const acknowledgeReminder = (id: number) => request<{ reminder_id: number
 // Agentic orchestration  (/orchestration/*)
 // ---------------------------------------------------------------------------
 
-export type ExecutionStep = { agent_name: string; started_at: string; completed_at: string; duration_ms: number; status: string; details?: string | null };
+export type ExecutionStep = {
+  agent_name: string; started_at: string; completed_at: string; duration_ms: number; status: string; details?: string | null;
+  step_order?: number | null; tool_name?: string | null; selection_reason?: string | null;
+  intermediate_output?: Record<string, unknown> | null; error_recovery?: string | null;
+};
 export type HealthSummary = {
   user_id: number; workflow_type: string; orchestration_state: string; generated_at: string; summary_text: string;
+  user_request?: string | null; detected_intent?: string | null; planner_mode?: string | null;
+  selected_agents?: string[]; termination_reason?: string | null;
   monitoring?: { status: string; metric_type: string; latest_value: number | null; unit: string; summary: string; is_urgent: boolean; urgent_reason?: string | null; recent_readings_count: number } | null;
   risk_assessment?: { risk_level: string; summary: string; is_experimental: boolean; rule_based_findings: Record<string, unknown>[]; experimental_ml_estimates: Record<string, unknown>[]; disclaimer: string } | null;
   medication?: { active_medications_count: number; overall_adherence_percentage: number | null; overdue_doses_count: number; missed_doses_count: number; taken_doses_count: number; summary: string; recommendations: string[] } | null;
@@ -474,7 +480,11 @@ export type HealthSummary = {
   safety_escalation?: Record<string, unknown> | null;
   execution_steps: ExecutionStep[]; duration_ms: number; disclaimer: string;
 };
-export type AuditEntry = { id: number; user_id: number; workflow_type: string; status: string; created_at: string; completed_at: string | null; duration_ms: number | null; summary: string | null; error_message: string | null };
+export type AuditEntry = {
+  id: number; user_id: number; workflow_type: string; status: string; created_at: string; completed_at: string | null;
+  duration_ms: number | null; summary: string | null; error_message: string | null;
+  user_request?: string | null; planner_mode?: string | null; selected_agents?: string[]; execution_steps?: ExecutionStep[];
+};
 export type OrchestrationAlerts = {
   user_id: number;
   unread_monitoring_events: { id: number; metric_type: string; event_type: string; event_level: string; message: string; created_at: string }[];
@@ -496,6 +506,14 @@ export const predictDiabetesV3 = (features: DiabetesFeatures) =>
 
 export const runAssessment = (body: { metric_type: string; include_knowledge: boolean; include_adherence?: boolean; experimental_ml?: boolean; ml_features?: DiabetesFeatures | null }) =>
   request<HealthSummary>('/orchestration/assess', { method: 'POST', body: { include_adherence: true, experimental_ml: false, ...body } });
+export const runDynamicWorkflow = (body: {
+  query: string;
+  metric_type?: string | null;
+  max_steps?: number;
+  experimental_ml?: boolean;
+  ml_features?: DiabetesFeatures | null;
+  allow_notification_delivery?: boolean;
+}) => request<HealthSummary>('/orchestration/execute', { method: 'POST', body });
 export const getHealthSummary = (primaryMetric = 'blood_glucose') => request<HealthSummary>('/orchestration/summary', { query: { primary_metric: primaryMetric } });
 export const runMedicationCheck = () => request<HealthSummary>('/orchestration/medication-check', { method: 'POST', body: { force_refresh: true } });
 export const getOrchestrationHistory = (limit = 20) => request<AuditEntry[]>('/orchestration/history', { query: { limit } });

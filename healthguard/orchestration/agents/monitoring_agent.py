@@ -143,10 +143,16 @@ class MonitoringAgent:
                 baseline_window=baseline_window,
                 recent_window=recent_window,
             )
-            decision = report.get("decision", {})
+            decision = report.get("monitoring_decision") or report.get("decision") or {}
+            longitudinal = report.get("longitudinal_analysis") or {}
+            anomaly = longitudinal.get("anomaly") or {}
             statistical_status = decision.get("statistical_status", "routine_monitoring")
             monitoring_priority = decision.get("monitoring_priority", "routine")
-            has_deviation = decision.get("statistical_deviation", False)
+            has_deviation = bool(
+                decision.get("statistical_deviation", False)
+                or statistical_status == "statistical_deviation_detected"
+                or anomaly.get("is_anomaly") is True
+            )
 
             status = "deviation" if has_deviation else "normal"
             if is_urgent:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Pencil, Plus, ShieldCheck, SkipForward } from 'lucide-react';
+import { AlertCircle, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Pencil, Plus, ShieldCheck, SkipForward } from 'lucide-react';
 import {
   confirmDose, createMedication, deactivateMedication, errorMessage, fmtTime, getAdherence, getSchedule, getTodayDoses, listMedications, saveSchedule, updateMedication,
   type Medication, type MedicationSchedule, type TodayDose, type UserProfile,
@@ -38,6 +38,7 @@ const emptyForm = (): MedForm => ({ name: '', dosage: '', frequency: '', instruc
 export default function Medications({ user, onChanged }: { user: UserProfile | null; onChanged: () => void }) {
   const [meds, setMeds] = useState<Medication[] | null>(null);
   const [doses, setDoses] = useState<TodayDose[] | null>(null);
+  const [doseRev, setDoseRev] = useState(0);
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState<MedForm>(emptyForm());
   const [busy, setBusy] = useState(false);
@@ -52,7 +53,7 @@ export default function Medications({ user, onChanged }: { user: UserProfile | n
   }, [user, showInactive]);
   useEffect(() => { void load(); }, [load]);
 
-  const done = (text: string) => { setMsg({ kind: 'success', text }); void load(); onChanged(); };
+  const done = (text: string) => { setMsg({ kind: 'success', text }); setDoseRev(r => r + 1); void load(); onChanged(); };
   const fail = (e: unknown) => setMsg({ kind: 'error', text: errorMessage(e) });
 
   async function add(e: FormEvent) {
@@ -69,7 +70,7 @@ export default function Medications({ user, onChanged }: { user: UserProfile | n
     } catch (err) { fail(err); } finally { setBusy(false); }
   }
 
-  async function dose(d: TodayDose, status: 'taken' | 'skipped') {
+  async function dose(d: TodayDose, status: 'taken' | 'skipped' | 'missed') {
     try { await confirmDose(d.occurrence_id, status); done(`${d.medication_name} marked as ${status}.`); } catch (e) { fail(e); }
   }
 
@@ -78,17 +79,18 @@ export default function Medications({ user, onChanged }: { user: UserProfile | n
   return <div className="two-cols medication-layout">
     <div className="stack">
       {msg && <Alert kind={msg.kind} onClose={() => setMsg(null)}>{msg.text}</Alert>}
-      <div className="panel"><div className="panel-heading"><div><h3>Today's doses</h3><p>Confirm doses as you take them</p></div><span className="panel-icon"><CalendarClock size={20} /></span></div>
+      <div className="panel"><div className="panel-heading"><div><h3>Today's doses</h3><p>Confirm doses as taken, missed, or skipped</p></div><span className="panel-icon"><CalendarClock size={20} /></span></div>
         {doses === null ? <Spinner /> : doses.length === 0 ? <Empty>No doses scheduled for today.</Empty> : <div className="med-list compact">{doses.map(d => <div className="med-item" key={d.occurrence_id}>
           <span className={`check ${d.status === 'taken' ? 'checked' : ''}`}><CheckCircle2 size={20} /></span>
           <div><b>{d.medication_name}</b><small>Scheduled {fmtTime(d.scheduled_at)}{d.taken_at ? ` · taken ${fmtTime(d.taken_at)}` : ''}</small></div>
           <Badge value={d.status} />
           {d.status !== 'taken' && <button className="btn btn-primary small" onClick={() => void dose(d, 'taken')}>Taken</button>}
-          {d.status !== 'taken' && d.status !== 'skipped' && <button className="btn btn-ghost small" onClick={() => void dose(d, 'skipped')} aria-label={`Skip ${d.medication_name}`}><SkipForward size={14} /></button>}
+          {d.status !== 'missed' && <button className="btn btn-danger small" onClick={() => void dose(d, 'missed')} title={`Mark ${d.medication_name} as missed`}><AlertCircle size={14} /> Missed</button>}
+          {d.status !== 'taken' && d.status !== 'skipped' && <button className="btn btn-ghost small" onClick={() => void dose(d, 'skipped')} aria-label={`Skip ${d.medication_name}`} title="Skip dose"><SkipForward size={14} /></button>}
         </div>)}</div>}
       </div>
       <div className="panel med-panel"><div className="panel-heading"><div><h3>Medication records</h3><p>Personal organization only · Not prescription advice</p></div><label className="check-line"><input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} /> Show inactive</label></div>
-        {meds === null ? <Spinner /> : meds.length === 0 ? <Empty>No medications yet. Add one below.</Empty> : <div className="med-list">{meds.map(m => <MedRow key={m.id} med={m} open={expanded === m.id} toggle={() => setExpanded(x => (x === m.id ? null : m.id))} onDone={done} onError={fail} />)}</div>}
+        {meds === null ? <Spinner /> : meds.length === 0 ? <Empty>No medications yet. Add one below.</Empty> : <div className="med-list">{meds.map(m => <MedRow key={m.id} med={m} open={expanded === m.id} doseRev={doseRev} toggle={() => setExpanded(x => (x === m.id ? null : m.id))} onDone={done} onError={fail} />)}</div>}
         <form className="form-grid med-add" onSubmit={add}>
           <h4 className="span-all">Add medication</h4>
           <label className="field">Name<input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
@@ -105,7 +107,7 @@ export default function Medications({ user, onChanged }: { user: UserProfile | n
   </div>;
 }
 
-function MedRow({ med, open, toggle, onDone, onError }: { med: Medication; open: boolean; toggle: () => void; onDone: (t: string) => void; onError: (e: unknown) => void }) {
+function MedRow({ med, open, doseRev, toggle, onDone, onError }: { med: Medication; open: boolean; doseRev: number; toggle: () => void; onDone: (t: string) => void; onError: (e: unknown) => void }) {
   const [schedule, setSchedule] = useState<MedicationSchedule | null | undefined>(undefined);
   const [adherence, setAdherence] = useState<Record<string, any> | null>(null);
   const [mode, setMode] = useState<'view' | 'edit' | 'schedule'>('view');
@@ -115,7 +117,7 @@ function MedRow({ med, open, toggle, onDone, onError }: { med: Medication; open:
     setSchedule(s.status === 'fulfilled' ? s.value.schedule : null);
     setAdherence(a.status === 'fulfilled' ? a.value : null);
   }, [med.id]);
-  useEffect(() => { if (open) void loadDetail(); else setMode('view'); }, [open, loadDetail]);
+  useEffect(() => { if (open) void loadDetail(); else setMode('view'); }, [open, doseRev, loadDetail]);
 
   const pct = (k: string) => { const v = adherence?.[k]?.adherence_percentage; return typeof v === 'number' ? `${v}%` : '—'; };
 

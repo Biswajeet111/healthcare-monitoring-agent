@@ -26,6 +26,7 @@ class WorkflowType(str, Enum):
     WORKFLOW_B_MEDICATION_ADHERENCE = "workflow_b_medication_adherence"
     WORKFLOW_C_HEALTH_SUMMARY = "workflow_c_health_summary"
     WORKFLOW_D_SAFETY_ESCALATION = "workflow_d_safety_escalation"
+    WORKFLOW_DYNAMIC_AGENTIC = "workflow_dynamic_agentic"
 
 
 class RiskLevel(str, Enum):
@@ -124,6 +125,11 @@ class ExecutionStepLog(BaseModel):
     duration_ms: int
     status: str
     details: Optional[str] = None
+    step_order: Optional[int] = None
+    tool_name: Optional[str] = None
+    selection_reason: Optional[str] = None
+    intermediate_output: Optional[dict[str, Any]] = None
+    error_recovery: Optional[str] = None
 
 
 class ConsolidatedHealthSummaryResponse(BaseModel):
@@ -132,6 +138,11 @@ class ConsolidatedHealthSummaryResponse(BaseModel):
     orchestration_state: OrchestrationState
     generated_at: str
     summary_text: str
+    user_request: Optional[str] = None
+    detected_intent: Optional[str] = None
+    planner_mode: Optional[str] = None
+    selected_agents: list[str] = Field(default_factory=list)
+    termination_reason: Optional[str] = None
     monitoring: Optional[MonitoringAgentResult] = None
     risk_assessment: Optional[RiskAssessmentAgentResult] = None
     medication: Optional[MedicationAgentResult] = None
@@ -140,6 +151,7 @@ class ConsolidatedHealthSummaryResponse(BaseModel):
     safety_escalation: Optional[dict[str, Any]] = None
     execution_steps: list[ExecutionStepLog] = Field(default_factory=list)
     duration_ms: int = 0
+    latency_breakdown_ms: Optional[dict[str, int]] = None
     disclaimer: str = (
         "HealthGuard AI is an informational and health monitoring system. "
         "It does not provide medical diagnoses, clinical treatment plans, or "
@@ -158,6 +170,10 @@ class AgentExecutionAuditResponse(BaseModel):
     duration_ms: Optional[int] = None
     summary: Optional[str] = None
     error_message: Optional[str] = None
+    user_request: Optional[str] = None
+    planner_mode: Optional[str] = None
+    selected_agents: list[str] = Field(default_factory=list)
+    execution_steps: list[ExecutionStepLog] = Field(default_factory=list)
 
 
 class RunAssessmentRequest(BaseModel):
@@ -170,3 +186,12 @@ class RunAssessmentRequest(BaseModel):
 
 class MedicationCheckRequest(BaseModel):
     force_refresh: bool = False
+
+
+class DynamicWorkflowRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=1000)
+    metric_type: Optional[str] = None
+    max_steps: int = Field(default=6, ge=1, le=8)
+    experimental_ml: bool = False
+    ml_features: Optional[dict[str, Any]] = None
+    allow_notification_delivery: bool = False

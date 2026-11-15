@@ -8,6 +8,7 @@ Never fabricates clinical evidence.
 """
 
 import logging
+import re
 from typing import Optional
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,28 @@ DEFAULT_DEGRADED_EXPLANATION = (
 )
 
 
+def _neutralize_diagnostic_overinterpretation(text: str) -> str:
+    """
+    Ensure RAG explanation text does not frame internal rule-based risk categories
+    or statistical deviations as confirmed clinical diagnoses.
+    """
+    if not text:
+        return text
+    cleaned = text
+    # Neutralize phrases that equate a rule-based risk label with a clinical diagnosis
+    cleaned = re.sub(
+        r"(?i)\b(you have|diagnosed with|indicates a diagnosis of|confirms)\s+(moderate|high|elevated)\s+risk\b",
+        r"the deterministic rule-based assessment indicates a \2 risk category (not a clinical diagnosis)",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"(?i)\b(diagnos(?:is|ed)\s+(?:of|with)\s+(?:diabetes|prediabetes|hypertension))\b",
+        "potential clinical consideration requiring professional evaluation (not a confirmed diagnosis)",
+        cleaned,
+    )
+    return cleaned
+
+
 class MedicalKnowledgeAgent:
     """Agent responsible for grounded medical knowledge retrieval and explanations."""
 
@@ -42,6 +65,7 @@ class MedicalKnowledgeAgent:
         n_results: int = 3,
         include_user_documents: bool = True,
         include_global_knowledge: bool = True,
+        max_tokens: Optional[int] = None,
     ) -> MedicalKnowledgeAgentResult:
         """
         Execute grounded RAG retrieval for clinical guidance with graceful degradation.
@@ -70,6 +94,7 @@ class MedicalKnowledgeAgent:
                 n_results=n_results,
                 include_user_documents=include_user_documents,
                 include_global_knowledge=include_global_knowledge,
+                max_tokens=max_tokens,
             )
 
             citations: list[MedicalCitation] = []
@@ -116,7 +141,7 @@ class MedicalKnowledgeAgent:
                     explanation = DEFAULT_DEGRADED_EXPLANATION
             else:
                 status = "success"
-                explanation = clean_answer
+                explanation = _neutralize_diagnostic_overinterpretation(clean_answer)
 
             return MedicalKnowledgeAgentResult(
                 status=status,

@@ -460,6 +460,32 @@ def confirm_dose(
     occ.notes = request.notes
     occ.updated_at = datetime.utcnow()
 
+    # Sync associated MedicationReminder in DB when dose status is updated
+    from healthguard.database.models import MedicationReminder
+    existing_reminder = (
+        db.query(MedicationReminder)
+        .filter(MedicationReminder.occurrence_id == occ.id)
+        .first()
+    )
+    if request.status in ("taken", "skipped"):
+        if existing_reminder and existing_reminder.status == "pending":
+            existing_reminder.status = "acknowledged"
+            existing_reminder.acknowledged_at = datetime.utcnow()
+    elif request.status == "missed" and not existing_reminder:
+        db.add(
+            MedicationReminder(
+                user_id=current_user.id,
+                occurrence_id=occ.id,
+                medication_id=occ.medication_id,
+                message=(
+                    f"Missed dose logged: {med.name} ({med.dosage}) "
+                    f"scheduled at {occ.scheduled_at.strftime('%H:%M UTC')}."
+                ),
+                status="pending",
+                created_at=datetime.utcnow(),
+            )
+        )
+
     db.commit()
     db.refresh(occ)
 
@@ -485,8 +511,18 @@ def get_todays_doses(
     if user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Refresh statuses for all user medications
+    active_meds = (
+        db.query(Medication)
+        .filter(Medication.user_id == user_id, Medication.is_active.is_(True))
+        .all()
+    )
+    for med in active_meds:
+        ensure_occurrences_for_window(db, med, days_ahead=7)
+
+    # Refresh statuses for all user medications (upcoming -> due -> overdue) and generate reminders
     refresh_occurrence_statuses(db, user_id)
+    from healthguard.services.medication_reminder_service import generate_reminders_for_user
+    generate_reminders_for_user(db, user_id)
     db.commit()
 
     now = datetime.utcnow()
