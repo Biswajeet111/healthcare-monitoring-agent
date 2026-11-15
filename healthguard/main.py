@@ -6,6 +6,7 @@ import math
 from sqlalchemy.exc import IntegrityError
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse, Response
 from healthguard.api.monitoring_events import (
     router as monitoring_events_router,
 )
@@ -1371,6 +1372,59 @@ def get_medical_documents(
         .order_by(MedicalDocument.uploaded_at.desc())
         .all()
     )
+
+
+@app.get("/documents/{document_id}/file")
+def download_medical_document_file(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream an authenticated user's uploaded PDF document for inline viewing or download."""
+    from healthguard.services.document_service import (
+        build_pdf_bytes_from_text,
+        resolve_stored_document_path,
+    )
+
+    document = (
+        db.query(MedicalDocument)
+        .filter(
+            MedicalDocument.id == document_id,
+            MedicalDocument.user_id == current_user.id,
+        )
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    safe_filename = (document.filename or f"document_{document.id}.pdf").replace('"', "")
+    stored_path = resolve_stored_document_path(document.stored_path)
+
+    if stored_path is not None:
+        return FileResponse(
+            path=str(stored_path),
+            media_type=document.content_type or "application/pdf",
+            filename=safe_filename,
+            headers={
+                "Content-Disposition": f'inline; filename="{safe_filename}"',
+            },
+        )
+
+    if document.extracted_text:
+        pdf_bytes = build_pdf_bytes_from_text(safe_filename, document.extracted_text)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{safe_filename}"',
+            },
+        )
+
+    raise HTTPException(
+        status_code=404,
+        detail="Document file not found on server storage",
+    )
+
 
 @app.delete("/documents/{document_id}")
 def delete_medical_document(

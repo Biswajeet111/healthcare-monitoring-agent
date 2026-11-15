@@ -60,7 +60,7 @@ export default function Documents({ user }: { user: UserProfile | null }) {
   async function onOpen(doc: MedicalDocument) {
     setOpeningId(doc.id); setMsg(null);
     try {
-      await openDocumentFile(doc.id, doc.filename);
+      await openDocumentFile(doc);
     } catch (e) {
       setMsg({ kind: 'error', text: errorMessage(e, 'Could not open PDF document') });
     } finally {

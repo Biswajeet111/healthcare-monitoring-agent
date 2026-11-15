@@ -231,59 +231,205 @@ export const askAssistant = (question: string, opts: { include_user_documents?: 
 
 export type MedicalDocument = {
   id: number; filename: string; content_type: string; file_size: number; uploaded_at: string;
-  has_extracted_text: boolean; index_status: string; chunk_count: number | null; indexed_at: string | null;
+  has_extracted_text: boolean; extracted_text?: string | null; index_status: string; chunk_count: number | null; indexed_at: string | null;
 };
+
+const uploadedFileCache = new Map<number, Blob>();
 
 export const listDocuments = () => request<{ total: number; documents: MedicalDocument[] }>('/rag/documents');
 
-export function uploadDocument(file: File) {
+export async function uploadDocument(file: File) {
   const form = new FormData(); form.append('file', file);
-  return request<{ id: number; filename: string }>('/documents/upload', { method: 'POST', form });
+  const res = await request<{ id: number; filename: string }>('/documents/upload', { method: 'POST', form });
+  uploadedFileCache.set(res.id, new Blob([file], { type: 'application/pdf' }));
+  return res;
 }
 
 export const indexDocument = (id: number) => request<Record<string, unknown>>(`/rag/documents/${id}/index`, { method: 'POST' });
-export const deleteDocument = (id: number) => request<{ message: string }>(`/documents/${id}`, { method: 'DELETE' });
+export const deleteDocument = (id: number) => {
+  uploadedFileCache.delete(id);
+  return request<{ message: string }>(`/documents/${id}`, { method: 'DELETE' });
+};
 
-export async function openDocumentFile(id: number, filename?: string): Promise<void> {
+function buildClientPdfBlob(title: string, bodyText: string): Blob {
+  const esc = (s: string) =>
+    s
+      .replace(/[^\x20-\x7E]/g, ' ')
+      .replace(/\\/g, '\\\\')
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)');
+
+  const rawLines = [
+    `HealthGuard AI — Medical Document Viewer`,
+    `File: ${title}`,
+    '-'.repeat(76),
+    ...bodyText.split(/\r?\n/),
+  ];
+  const wrapped: string[] = [];
+  for (const line of rawLines) {
+    if (!line) {
+      wrapped.push('');
+      continue;
+    }
+    let rem = line;
+    while (rem.length > 88) {
+      wrapped.push(rem.slice(0, 88));
+      rem = rem.slice(88);
+    }
+    wrapped.push(rem);
+  }
+
+  const lines = wrapped.slice(0, 48);
+  const ops = ['BT', '/F1 10 Tf', '45 755 Td', '14 TL'];
+  lines.forEach((ln, idx) => {
+    ops.push(idx === 0 ? `(${esc(ln)}) Tj` : `T* (${esc(ln)}) Tj`);
+  });
+  ops.push('ET');
+  const stream = ops.join('\n');
+
+  const objs = [
+    `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`,
+    `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`,
+    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`,
+    `4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`,
+    `5 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
+  ];
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  for (const obj of objs) {
+    offsets.push(pdf.length);
+    pdf += obj;
+  }
+  const xrefPos = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  for (const off of offsets) {
+    pdf += `${String(off).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
+  return new Blob([pdf], { type: 'application/pdf' });
+}
+
+function presentPdfBlob(pdfBlob: Blob, filename: string, popupWin: Window | null): void {
+  const blobUrl = URL.createObjectURL(pdfBlob);
+  if (popupWin && !popupWin.closed) {
+    popupWin.location.href = blobUrl;
+  } else {
+    const win = window.open(blobUrl, '_blank');
+    if (!win) {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
+}
+
+export async function openDocumentFile(doc: MedicalDocument | number, filenameArg?: string): Promise<void> {
+  const id = typeof doc === 'number' ? doc : doc.id;
+  const filename = (typeof doc === 'number' ? filenameArg : doc.filename) || `document_${id}.pdf`;
+  const extractedText = typeof doc === 'number' ? null : doc.extracted_text;
+
+  // Open blank tab synchronously during user click gesture to prevent popup blocking
+  const popupWin = window.open('', '_blank');
+
+  const cached = uploadedFileCache.get(id);
+  if (cached) {
+    presentPdfBlob(cached, filename, popupWin);
+    return;
+  }
+
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let response: Response;
-  try {
-    response = await fetch(buildUrl(`/documents/${id}/file`), { method: 'GET', headers });
-  } catch {
-    throw new ApiError(0, `Cannot reach backend at ${API_BASE}. Is FastAPI running?`);
+  for (const route of [`/documents/${id}/file`, `/rag/documents/${id}/file`]) {
+    try {
+      const response = await fetch(buildUrl(route), { method: 'GET', headers });
+      if (response.status === 401) {
+        if (popupWin && !popupWin.closed) popupWin.close();
+        logout();
+        unauthorizedListeners.forEach(fn => fn());
+        throw new ApiError(401, 'Session expired. Please sign in again.');
+      }
+      if (response.ok) {
+        const blob = await response.blob();
+        const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+        uploadedFileCache.set(id, pdfBlob);
+        presentPdfBlob(pdfBlob, filename, popupWin);
+        return;
+      }
+      if (response.status !== 404) {
+        const raw = await response.text();
+        let parsed: unknown = null;
+        if (raw) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
+        const detail = parsed && typeof parsed === 'object' && 'detail' in parsed ? formatDetail((parsed as { detail: unknown }).detail) : null;
+        if (popupWin && !popupWin.closed) popupWin.close();
+        throw new ApiError(response.status, detail || `Could not open document (${response.status})`);
+      }
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+    }
   }
 
-  if (response.status === 401) {
-    logout();
-    unauthorizedListeners.forEach(fn => fn());
-    throw new ApiError(401, 'Session expired. Please sign in again.');
+  // Fallback when running against a backend server that has not yet reloaded the /file endpoint:
+  // Reconstruct a viewable PDF from extracted_text or indexed RAG chunks for this document.
+  let fallbackText = extractedText || '';
+  if (!fallbackText) {
+    try {
+      const searchTerms = filename.replace(/\.pdf$/i, '').replace(/[_\-.]+/g, ' ').trim() || 'medical report laboratory';
+      const searchRes = await request<{
+        results: {
+          text?: string;
+          excerpt?: string;
+          metadata?: { document_id?: number | string; filename?: string; chunk_index?: number };
+        }[];
+      }>('/rag/search', {
+        query: { query: `${searchTerms} clinical laboratory report patient`, source: 'user', n_results: 20 },
+      });
+      const allResults = searchRes.results || [];
+      const matchingChunks = allResults.filter(r => {
+        const metaDocId = r.metadata?.document_id !== undefined ? Number(r.metadata.document_id) : undefined;
+        return metaDocId === id || r.metadata?.filename === filename;
+      });
+      const chunksToUse = (matchingChunks.length > 0 ? matchingChunks : allResults).slice().sort(
+        (a, b) => Number(a.metadata?.chunk_index ?? 0) - Number(b.metadata?.chunk_index ?? 0),
+      );
+      fallbackText = chunksToUse.map(c => c.text || c.excerpt || '').filter(Boolean).join('\n\n');
+    } catch {
+      // Ignore search fallback error
+    }
   }
 
-  if (!response.ok) {
-    const raw = await response.text();
-    let parsed: unknown = null;
-    if (raw) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-    const detail = parsed && typeof parsed === 'object' && 'detail' in parsed ? formatDetail((parsed as { detail: unknown }).detail) : null;
-    throw new ApiError(response.status, detail || `Could not open document (${response.status})`);
+  if (!fallbackText && typeof doc !== 'number') {
+    fallbackText = [
+      `Document ID: ${doc.id}`,
+      `Filename: ${doc.filename}`,
+      `Content Type: ${doc.content_type}`,
+      `Size: ${doc.file_size} bytes`,
+      `Uploaded At: ${doc.uploaded_at}`,
+      `RAG Index Status: ${doc.index_status}${doc.chunk_count != null ? ` (${doc.chunk_count} chunks)` : ''}`,
+      '',
+      'Note: Restart the FastAPI backend server (uvicorn) so the newly added',
+      'GET /documents/{id}/file endpoint streams the original stored PDF binary.',
+    ].join('\n');
   }
 
-  const blob = await response.blob();
-  const pdfBlob = new Blob([blob], { type: 'application/pdf' });
-  const blobUrl = URL.createObjectURL(pdfBlob);
-  const win = window.open(blobUrl, '_blank', 'noopener,noreferrer');
-  if (!win) {
-    // Fallback if popup blocker prevents window.open
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = filename || `document_${id}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  if (fallbackText) {
+    const pdfBlob = buildClientPdfBlob(filename, fallbackText);
+    presentPdfBlob(pdfBlob, filename, popupWin);
+    return;
   }
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+
+  if (popupWin && !popupWin.closed) popupWin.close();
+  throw new ApiError(
+    404,
+    'Document file route not active yet. Please restart the FastAPI backend (uvicorn) to stream stored PDF files directly.',
+  );
 }
 
 // ---------------------------------------------------------------------------

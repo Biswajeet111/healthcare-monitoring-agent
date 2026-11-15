@@ -301,6 +301,7 @@ def get_user_documents_with_index_status(
                 "file_size": d.file_size,
                 "uploaded_at": d.uploaded_at.isoformat(),
                 "has_extracted_text": bool(d.extracted_text),
+                "extracted_text": d.extracted_text,
                 "index_status": (
                     index_statuses[d.id].status
                     if d.id in index_statuses
@@ -320,6 +321,56 @@ def get_user_documents_with_index_status(
             for d in documents
         ],
     }
+
+
+@router.get("/documents/{document_id}/file")
+def get_user_document_file(
+    document_id: int,
+    current_user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream an authenticated user's uploaded PDF document for inline viewing or download."""
+    from fastapi.responses import FileResponse, Response
+    from healthguard.services.document_service import (
+        build_pdf_bytes_from_text,
+        resolve_stored_document_path,
+    )
+
+    document = (
+        db.query(MedicalDocument)
+        .filter(
+            MedicalDocument.id == document_id,
+            MedicalDocument.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found or access denied")
+
+    safe_filename = (document.filename or f"document_{document.id}.pdf").replace('"', "")
+    stored_path = resolve_stored_document_path(document.stored_path)
+
+    if stored_path is not None:
+        return FileResponse(
+            path=str(stored_path),
+            media_type=document.content_type or "application/pdf",
+            filename=safe_filename,
+            headers={
+                "Content-Disposition": f'inline; filename="{safe_filename}"',
+            },
+        )
+
+    if document.extracted_text:
+        pdf_bytes = build_pdf_bytes_from_text(safe_filename, document.extracted_text)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{safe_filename}"',
+            },
+        )
+
+    raise HTTPException(status_code=404, detail="Document file not found on server storage")
 
 
 @router.get("/search")
