@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Database, ExternalLink, FileText, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
-import { deleteDocument, errorMessage, fmtDateTime, indexDocument, listDocuments, openDocumentFile, uploadDocument, type MedicalDocument, type UserProfile } from '../api';
+import { deleteDocument, DEMO, errorMessage, fmtDateTime, indexDocument, listDocuments, openDocumentFile, uploadDocument, type MedicalDocument, type UserProfile } from '../api';
 import { Alert, Badge, ConfirmButton, Empty, Spinner } from '../components/ui';
 
 function fmtSize(bytes: number): string {
@@ -77,7 +77,13 @@ export default function Documents({ user }: { user: UserProfile | null }) {
     } catch (e) { setMsg({ kind: 'error', text: errorMessage(e, 'Delete failed') }); }
   }
 
-  if (!user) return <Alert kind="info">Sign in to the live backend to upload and manage medical documents.</Alert>;
+  if (!user) {
+    return <Alert kind="info">
+      {DEMO
+        ? 'Medical PDF upload, persistent file storage, text extraction, and isolated per-user ChromaDB vector indexing require the full FastAPI backend and are unavailable in this lightweight Vercel demo.'
+        : 'Sign in to the live backend to upload and manage medical documents.'}
+    </Alert>;
+  }
 
   return <div className="two-cols">
     <div className="panel">

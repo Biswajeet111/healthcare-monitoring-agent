@@ -3,7 +3,7 @@ import {
   ArrowRight, Bell, BrainCircuit, ChevronDown, ClipboardList, FileText, HeartPulse, LayoutDashboard, Menu, MessageCircle, RefreshCw, Settings2, ShieldCheck, TrendingUp, UserRound, X,
 } from 'lucide-react';
 import {
-  currentUser, DEMO, demoMetrics, errorMessage, getMetrics, getToken, logout, notificationSummary, onUnauthorized, pivotDaily,
+  currentUser, DEMO, DEMO_BANNER_TITLE, demoMetrics, errorMessage, getMetrics, getToken, logout, notificationSummary, onUnauthorized, pivotDaily,
   type Metric, type UserProfile,
 } from './api';
 import { rangeDays, type Range } from './components/ui';
@@ -52,10 +52,27 @@ const subheading: Record<Page, string> = {
   Settings: 'Configure your environment and review data privacy guidance.',
 };
 
+const PAGE_PATHS: Record<Page, string> = {
+  Overview: '/',
+  Analytics: '/analytics',
+  'AI Assistant': '/assistant',
+  Medications: '/medications',
+  Agents: '/agents',
+  Documents: '/documents',
+  Notifications: '/notifications',
+  Settings: '/settings',
+};
+
+function pageFromPathname(pathname: string): Page {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  const match = (Object.entries(PAGE_PATHS) as [Page, string][]).find(([, p]) => p === clean);
+  return match ? match[0] : 'Overview';
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean>(DEMO || !!getToken());
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [page, setPage] = useState<Page>('Overview');
+  const [page, setPageState] = useState<Page>(() => pageFromPathname(window.location.pathname));
   const [menu, setMenu] = useState(false);
   const [metrics, setMetrics] = useState<Metric[]>(DEMO ? demoMetrics : []);
   const [loading, setLoading] = useState(!DEMO);
@@ -63,6 +80,18 @@ export default function App() {
   const [range, setRange] = useState<Range>('14 days');
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  const setPage = useCallback((next: Page) => {
+    setPageState(next);
+    const targetPath = PAGE_PATHS[next] || '/';
+    if (window.location.pathname !== targetPath) {
+      window.history.replaceState(null, '', targetPath);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.title = DEMO ? DEMO_BANNER_TITLE : 'HealthGuard AI | Health Intelligence';
+  }, []);
 
   const handleSignOut = useCallback(() => {
     logout();
@@ -147,14 +176,14 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="privacy-card">
             <ShieldCheck size={21} />
-            <strong>Privacy-conscious design</strong>
-            <p>Local AI available with Ollama. Never rely on AI for urgent medical decisions.</p>
+            <strong>{DEMO ? 'Educational Demo Mode' : 'Privacy-conscious design'}</strong>
+            <p>{DEMO ? 'All measurements and medications shown are synthetic. Never rely on AI for medical decisions.' : 'Local AI available with Ollama. Never rely on AI for urgent medical decisions.'}</p>
           </div>
           <button type="button" className="side-user as-button" onClick={() => setPage('Settings')}>
             <div className="avatar"><UserRound size={20} /></div>
             <div>
-              <b>{user?.full_name || 'HealthGuard workspace'}</b>
-              <small>{DEMO ? 'Demo environment' : user?.email || 'Connected environment'}</small>
+              <b>{user?.full_name || (DEMO ? 'Synthetic Demo Visitor' : 'HealthGuard workspace')}</b>
+              <small>{DEMO ? 'No login required · Synthetic data' : user?.email || 'Connected environment'}</small>
             </div>
             <ChevronDown size={16} />
           </button>
@@ -172,7 +201,7 @@ export default function App() {
           <div className="top-actions">
             <span className={`mode-badge ${DEMO ? 'demo' : ''}`}>
               <span className="status-dot" />
-              {DEMO ? 'DEMO MODE' : 'LIVE API'}
+              {DEMO ? 'EDUCATIONAL DEMO' : 'LIVE API'}
             </span>
             <button className="icon-btn bell-btn" aria-label="Notifications" onClick={() => setPage('Notifications')}>
               <Bell size={19} />
@@ -192,7 +221,7 @@ export default function App() {
               <p>{subheading[page]}</p>
             </div>
             <div className="heading-actions">
-              {(page === 'Overview' || page === 'Analytics') && (
+              {!DEMO && (page === 'Overview' || page === 'Analytics') && (
                 <button className="outline-btn" onClick={() => void refresh()} disabled={loading}>
                   <RefreshCw size={16} />
                   {loading ? 'Loading' : 'Refresh data'}
@@ -204,7 +233,7 @@ export default function App() {
           {DEMO && (
             <div className="notice">
               <ShieldCheck size={17} />
-              <span><b>Demonstration data.</b> Measurements and medications on this screen are synthetic. No medical records are being loaded.</span>
+              <span><b>{DEMO_BANNER_TITLE}.</b> Displayed measurements and medications are synthetic for evaluation. No real patient records are loaded; features requiring the full FastAPI backend are marked unavailable.</span>
             </div>
           )}
 

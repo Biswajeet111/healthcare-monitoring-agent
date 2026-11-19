@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Activity, Bell, BrainCircuit, ChevronDown, ChevronUp, ClipboardList, Database, FileText, FlaskConical, History, Pill, Play, RefreshCw, Send, ShieldCheck, Sparkles } from 'lucide-react';
 import {
-  errorMessage, fmtDateTime, getHealthSummary, getOrchestrationAlerts, getOrchestrationHistory, humanize, predictDiabetesV3, runAssessment, runDynamicWorkflow, runMedicationCheck,
+  DEMO, errorMessage, fmtDateTime, getHealthSummary, getOrchestrationAlerts, getOrchestrationHistory, humanize, predictDiabetesV3, runAssessment, runDynamicWorkflow, runMedicationCheck,
   type AuditEntry, type DiabetesFeatures, type DiabetesPredictionV3, type ExecutionStep, type HealthSummary, type OrchestrationAlerts, type UserProfile,
 } from '../api';
 import { Alert, Badge, Empty, Spinner } from '../components/ui';
@@ -154,7 +154,13 @@ export default function Agents({ user }: { user: UserProfile | null }) {
 
   return <>
     <div className="agent-banner"><BrainCircuit size={32} /><div><h3>Dynamic Agentic Orchestration</h3><p>Submit a natural-language health request or run a structured workflow. The orchestrator iteratively selects only the needed allowlisted tools, evaluates intermediate observations, and records a verifiable execution trace.</p></div></div>
-    {!user ? <Alert kind="info">Sign in to the live backend to run agent workflows.</Alert> : <div className="panel run-panel">
+    {!user ? (
+      <Alert kind="info">
+        {DEMO
+          ? 'Dynamic Multi-Agent Orchestration (POST /orchestration/execute), persisted execution audit history, and the Experimental Diabetes Screening Model (v3) require the full FastAPI + SQLAlchemy + ChromaDB + Scikit-Learn backend and are unavailable in this lightweight Vercel demo. Agent executions are never simulated here. Use the AI Assistant tab to test live Groq educational Q&A.'
+          : 'Sign in to the live backend to run agent workflows.'}
+      </Alert>
+    ) : <div className="panel run-panel">
       <div className="panel-heading">
         <div>
           <h3>Dynamic agentic request (Decision → Execution → Observation loop)</h3>
@@ -216,12 +222,12 @@ export default function Agents({ user }: { user: UserProfile | null }) {
       return <div className="panel agent-tile" key={key}>
         <div className="agent-top">
           <span className={`feature-icon ${tone}`}><Icon size={21} /></span>
-          {step ? <Badge value={`Step ${stepOrder} · ${step.status}`} /> : <span className="architecture-badge">{result ? 'SKIPPED' : 'IDLE'}</span>}
+          {step ? <Badge value={`Step ${stepOrder} · ${step.status}`} /> : <span className="architecture-badge">{result ? 'SKIPPED' : DEMO && !user ? 'FULL BACKEND' : 'IDLE'}</span>}
         </div>
         <h3>{name} Agent</h3>
         <p>{step?.selection_reason || desc}</p>
         <div className="agent-foot">
-          <span>{step ? `${step.tool_name ? `${step.tool_name} · ` : ''}${step.duration_ms} ms` : result ? 'Not needed for this request' : 'Allowlisted agent service'}</span>
+          <span>{step ? `${step.tool_name ? `${step.tool_name} · ` : ''}${step.duration_ms} ms` : result ? 'Not needed for this request' : DEMO && !user ? 'Requires full FastAPI backend' : 'Allowlisted agent service'}</span>
         </div>
       </div>;
     })}</div>

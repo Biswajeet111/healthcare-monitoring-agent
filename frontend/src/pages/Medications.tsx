@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AlertCircle, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Pencil, Plus, ShieldCheck, SkipForward } from 'lucide-react';
 import {
-  confirmDose, createMedication, deactivateMedication, errorMessage, fmtTime, getAdherence, getSchedule, getTodayDoses, listMedications, saveSchedule, updateMedication,
+  confirmDose, createMedication, deactivateMedication, DEMO, demoMedicationMeta, demoMedications, demoTodayDoses, errorMessage, fmtTime, getAdherence, getSchedule, getTodayDoses, listMedications, saveSchedule, updateMedication,
   type Medication, type MedicationSchedule, type TodayDose, type UserProfile,
 } from '../api';
 import { Alert, Badge, ConfirmButton, Empty, Spinner } from '../components/ui';
@@ -72,6 +72,44 @@ export default function Medications({ user, onChanged }: { user: UserProfile | n
 
   async function dose(d: TodayDose, status: 'taken' | 'skipped' | 'missed') {
     try { await confirmDose(d.occurrence_id, status); done(`${d.medication_name} marked as ${status}.`); } catch (e) { fail(e); }
+  }
+
+  if (!user && DEMO) {
+    return <div className="two-cols medication-layout">
+      <div className="stack">
+        <Alert kind="info">Read-only synthetic medication records are displayed below for educational evaluation. Creating prescriptions, editing schedules, confirming doses, and generating live reminders require the full FastAPI + database backend and are unavailable in this lightweight Vercel demo.</Alert>
+        <div className="panel"><div className="panel-heading"><div><h3>Today's doses (Synthetic)</h3><p>Read-only synthetic schedule preview</p></div><span className="panel-icon"><CalendarClock size={20} /></span></div>
+          <div className="med-list compact">{demoTodayDoses.map(d => <div className="med-item" key={d.occurrence_id}>
+            <span className={`check ${d.status === 'taken' ? 'checked' : ''}`}><CheckCircle2 size={20} /></span>
+            <div><b>{d.medication_name}</b><small>Scheduled {fmtTime(d.scheduled_at)}{d.taken_at ? ` · taken ${fmtTime(d.taken_at)}` : ''}</small></div>
+            <Badge value={d.status} />
+          </div>)}</div>
+        </div>
+        <div className="panel med-panel"><div className="panel-heading"><div><h3>Synthetic medication records</h3><p>Expand any entry to inspect synthetic schedule and adherence statistics</p></div><Badge value="read only" tone="info" /></div>
+          <div className="med-list">{demoMedications.map(m => {
+            const isOpen = expanded === m.id;
+            const meta = demoMedicationMeta[m.id];
+            return <div className="med-row" key={m.id}>
+              <div className="med-item">
+                <span className="feature-icon purple"><ClipboardList size={18} /></span>
+                <div><b>{m.name}</b><small>{m.dosage} · {m.frequency}{m.instructions ? ` · ${m.instructions}` : ''}</small></div>
+                <button className="icon-btn" onClick={() => setExpanded(x => (x === m.id ? null : m.id))} aria-expanded={isOpen} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${m.name}`}>{isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>
+              </div>
+              {isOpen && meta && <div className="med-detail">
+                <div className="detail-grid">
+                  <div><span>Schedule</span><b>{meta.scheduleText}</b></div>
+                  <div><span>Adherence (7 days)</span><b>{meta.adherence7d}%</b></div>
+                  <div><span>Adherence (30 days)</span><b>{meta.adherence30d}%</b></div>
+                  <div><span>Overall</span><b>{meta.overall}%</b></div>
+                </div>
+                <p className="fineprint">Taken {meta.taken} · Missed {meta.missed} · Skipped {meta.skipped} · Unconfirmed {meta.unconfirmed}. Synthetic demonstration data only — not clinical prescription advice.</p>
+              </div>}
+            </div>;
+          })}</div>
+        </div>
+      </div>
+      <div className="panel info-panel"><ShieldCheck size={28} /><h3>Medication safety</h3><p>Never start, stop, skip, or change a prescribed medication based on AI-generated content. Consult your prescriber or pharmacist.</p><div className="info-line"><CheckCircle2 size={17} /> Synthetic read-only demo view</div><div className="info-line"><CheckCircle2 size={17} /> Adherence visibility</div><div className="info-line"><CheckCircle2 size={17} /> No automated prescribing</div><p className="fineprint">Interactive dose confirmations, custom schedules, and background reminder workers run in the full local/cloud FastAPI backend.</p></div>
+    </div>;
   }
 
   if (!user) return <Alert kind="info">Medication management requires signing in to the live backend.</Alert>;

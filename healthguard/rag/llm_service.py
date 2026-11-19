@@ -144,6 +144,28 @@ professional medical advice."
 """
 
 
+def get_active_llm_provider() -> str:
+    """Return the configured LLM provider ('ollama' or 'groq')."""
+    provider = (settings.LLM_PROVIDER or "ollama").strip().lower()
+    return provider if provider in ("ollama", "groq") else "ollama"
+
+
+def get_active_llm_model(model: Optional[str] = None) -> str:
+    """Return the effective model name for the active LLM provider."""
+    if model:
+        return model
+    if get_active_llm_provider() == "groq":
+        return (settings.GROQ_MODEL or "qwen/qwen3.8-27b").strip()
+    return (settings.LLM_MODEL or "llama3.1").strip()
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove any <think>...</think> reasoning blocks emitted by reasoning models."""
+    if not text:
+        return ""
+    return re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
+
+
 def check_ollama_available() -> bool:
     """Check whether the local Ollama service is reachable."""
 
@@ -158,6 +180,34 @@ def check_ollama_available() -> bool:
     except Exception:
         logger.warning("Ollama service is unavailable.")
         return False
+
+
+def check_groq_available(verify_remote: bool = False) -> bool:
+    """Check whether Groq cloud inference is configured (and optionally reachable)."""
+    api_key = (settings.GROQ_API_KEY or "").strip()
+    if not api_key:
+        logger.warning("Groq API key is not configured.")
+        return False
+    if not verify_remote:
+        return True
+    try:
+        base_url = settings.GROQ_BASE_URL.rstrip("/")
+        response = httpx.get(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=8.0,
+        )
+        return response.status_code == 200
+    except Exception:
+        logger.warning("Groq API service is unreachable.")
+        return False
+
+
+def check_llm_available(verify_remote: bool = False) -> bool:
+    """Check availability of the configured active LLM provider."""
+    if get_active_llm_provider() == "groq":
+        return check_groq_available(verify_remote=verify_remote)
+    return check_ollama_available()
 
 
 def list_ollama_models() -> list[str]:
@@ -183,6 +233,39 @@ def list_ollama_models() -> list[str]:
     except Exception:
         logger.exception("Failed to retrieve Ollama models.")
         return []
+
+
+def list_groq_models() -> list[str]:
+    """Return chat models available on the configured Groq account."""
+    api_key = (settings.GROQ_API_KEY or "").strip()
+    if not api_key:
+        return []
+    try:
+        base_url = settings.GROQ_BASE_URL.rstrip("/")
+        response = httpx.get(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            models = [
+                m["id"]
+                for m in data.get("data", [])
+                if isinstance(m, dict) and "id" in m
+            ]
+            return sorted(models)
+        return [get_active_llm_model()]
+    except Exception:
+        logger.warning("Failed to retrieve Groq model list.")
+        return [get_active_llm_model()]
+
+
+def list_available_llm_models() -> list[str]:
+    """Return available models for the currently configured LLM provider."""
+    if get_active_llm_provider() == "groq":
+        return list_groq_models()
+    return list_ollama_models()
 
 
 def _build_reference_context(
@@ -477,16 +560,31 @@ def generate_answer(
     max_tokens: Optional[int] = None,
 ) -> dict:
     """
-    Generate a medical answer using Ollama and retrieved RAG context.
+    Generate a medical answer using the configured LLM provider (Ollama or Groq)
+    and retrieved RAG context.
 
     Preserves the existing API response structure.
     """
 
-    model_name = model or settings.LLM_MODEL
+    provider = get_active_llm_provider()
+    model_name = get_active_llm_model(model)
     effective_max_tokens = int(max_tokens) if max_tokens and max_tokens > 0 else MAX_TOKENS
 
-    if not check_ollama_available():
-
+    if provider == "groq":
+        if not check_groq_available():
+            return {
+                "answer": None,
+                "error": (
+                    "The cloud AI service (Groq) is not configured. "
+                    "Please set GROQ_API_KEY in the deployment environment."
+                ),
+                "sources": [],
+                "limitations": [
+                    "Cloud LLM (Groq) unavailable."
+                ],
+                "disclaimer": DISCLAIMER,
+            }
+    elif not check_ollama_available():
         return {
             "answer": None,
             "error": (
@@ -502,12 +600,21 @@ def generate_answer(
         }
 
     # --------------------------------------------------
-    # 1. Prepare retrieved medical context
+    # 1. Prepare retrieved medical context & cloud privacy guard
     # --------------------------------------------------
 
     reference_context, included_chunks = (
         _build_reference_context(context_chunks)
     )
+
+    effective_personal_context = personal_context
+    cloud_privacy_limitation: Optional[str] = None
+    if provider == "groq" and personal_context and not settings.ALLOW_CLOUD_PERSONAL_DATA:
+        effective_personal_context = None
+        cloud_privacy_limitation = (
+            "Personal health history was omitted from cloud LLM generation "
+            "because ALLOW_CLOUD_PERSONAL_DATA is disabled."
+        )
 
     # --------------------------------------------------
     # 2. Prepare user message
@@ -516,7 +623,7 @@ def generate_answer(
     user_message = _build_user_message(
         question=question,
         reference_context=reference_context,
-        personal_context=personal_context,
+        personal_context=effective_personal_context,
     )
     if max_tokens is not None and max_tokens <= 350:
         user_message += (
@@ -525,47 +632,73 @@ def generate_answer(
         )
 
     # --------------------------------------------------
-    # 3. Prepare Ollama request
-    # --------------------------------------------------
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_message,
-            },
-        ],
-        "stream": False,
-        "options": {
-            "temperature": 0.1,
-            "num_predict": effective_max_tokens,
-        },
-    }
-
-    # --------------------------------------------------
-    # 4. Generate answer
+    # 3 & 4. Prepare request and generate answer
     # --------------------------------------------------
 
     try:
-
-        response = httpx.post(
-            f"{settings.OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=GENERATION_TIMEOUT,
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        answer_text = (
-            data.get("message", {}).get("content", "")
-        )
+        if provider == "groq":
+            api_key = (settings.GROQ_API_KEY or "").strip()
+            base_url = settings.GROQ_BASE_URL.rstrip("/")
+            groq_payload = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_message,
+                    },
+                ],
+                "temperature": 0.1,
+                "max_tokens": effective_max_tokens,
+            }
+            response = httpx.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=groq_payload,
+                timeout=GENERATION_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices") or []
+            raw_content = (
+                choices[0].get("message", {}).get("content", "")
+                if choices and isinstance(choices[0], dict)
+                else ""
+            )
+            answer_text = _strip_think_tags(raw_content)
+        else:
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_message,
+                    },
+                ],
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,
+                    "num_predict": effective_max_tokens,
+                },
+            }
+            response = httpx.post(
+                f"{settings.OLLAMA_BASE_URL}/api/chat",
+                json=payload,
+                timeout=GENERATION_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            answer_text = data.get("message", {}).get("content", "")
 
         if not answer_text.strip():
 
@@ -602,6 +735,9 @@ def generate_answer(
 
         limitations = list(citation_limitations)
 
+        if cloud_privacy_limitation:
+            limitations.append(cloud_privacy_limitation)
+
         if not included_chunks:
 
             limitations.append(
@@ -610,7 +746,7 @@ def generate_answer(
                 "general medical knowledge."
             )
 
-        if personal_context:
+        if effective_personal_context:
 
             limitations.append(
                 "Personal health information was obtained "
@@ -627,12 +763,14 @@ def generate_answer(
             "limitations": limitations,
             "disclaimer": DISCLAIMER,
             "model_used": model_name,
+            "provider_used": provider,
         }
 
     except httpx.TimeoutException:
 
         logger.error(
-            "Ollama request timed out after %s seconds.",
+            "%s LLM request timed out after %s seconds.",
+            provider,
             GENERATION_TIMEOUT,
         )
 
@@ -649,29 +787,35 @@ def generate_answer(
 
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
-        ollama_detail = ""
+        provider_detail = ""
         try:
             err_json = exc.response.json()
             if isinstance(err_json, dict) and err_json.get("error"):
-                ollama_detail = str(err_json["error"]).strip()
+                err_val = err_json["error"]
+                if isinstance(err_val, dict):
+                    provider_detail = str(err_val.get("message") or err_val).strip()
+                else:
+                    provider_detail = str(err_val).strip()
         except Exception:
             try:
                 raw_text = (exc.response.text or "").strip()
                 if raw_text:
-                    ollama_detail = raw_text[:240]
+                    provider_detail = raw_text[:240]
             except Exception:
                 pass
 
-        if ollama_detail:
+        if provider_detail:
             logger.error(
-                "Ollama API error: %s (%s)",
+                "%s API error: %s (%s)",
+                provider,
                 status_code,
-                ollama_detail,
+                provider_detail,
             )
-            error_msg = f"LLM API error: {status_code} ({ollama_detail})"
+            error_msg = f"LLM API error: {status_code} ({provider_detail})"
         else:
             logger.error(
-                "Ollama API error: %s",
+                "%s API error: %s",
+                provider,
                 status_code,
             )
             error_msg = f"LLM API error: {status_code}"
@@ -681,21 +825,23 @@ def generate_answer(
             "error": error_msg,
             "sources": _build_sources(included_chunks),
             "limitations": [
-                f"Local LLM generation failed with HTTP {status_code}"
-                + (f": {ollama_detail}" if ollama_detail else ".")
+                f"{provider.upper()} LLM generation failed with HTTP {status_code}"
+                + (f": {provider_detail}" if provider_detail else ".")
             ],
             "disclaimer": DISCLAIMER,
         }
 
     except Exception as exc:
 
-        logger.exception(
-            "Unexpected error during Ollama generation."
+        logger.error(
+            "Unexpected error during %s generation: %s",
+            provider,
+            type(exc).__name__,
         )
 
         return {
             "answer": None,
-            "error": f"LLM error: {exc}",
+            "error": f"LLM error: {type(exc).__name__}",
             "sources": [],
             "limitations": [],
             "disclaimer": DISCLAIMER,

@@ -36,7 +36,13 @@ from healthguard.orchestration.tools import (
     validate_tool_against_request_scope,
     validate_tool_call,
 )
-from healthguard.rag.llm_service import check_ollama_available
+from healthguard.rag.llm_service import (
+    _strip_think_tags,
+    check_groq_available,
+    check_ollama_available,
+    get_active_llm_model,
+    get_active_llm_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +335,7 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
     raise ValueError("LLM response did not contain a valid JSON object.")
 
 
-def _call_ollama_planner_once(
+def _build_planner_user_payload(
     user_request: str,
     minimal_context: dict[str, Any],
     observations: list[dict[str, Any]],
@@ -338,8 +344,8 @@ def _call_ollama_planner_once(
     allow_notification_delivery: bool,
     retry_feedback: Optional[str] = None,
     request_scope: Optional[RequestToolScope] = None,
-) -> PlannerDecision:
-    """Invoke Ollama (`llama3.1`) once for the current step of the planning loop."""
+) -> dict[str, Any]:
+    """Build the compact JSON planning payload shared by Ollama and Groq planners."""
     if request_scope is None:
         initial_intent = classify_request_intent(user_request)
         request_scope = build_request_tool_scope(
@@ -409,6 +415,30 @@ def _call_ollama_planner_once(
     }
     if retry_feedback:
         user_payload["previous_invalid_proposal_error"] = retry_feedback
+    return user_payload
+
+
+def _call_ollama_planner_once(
+    user_request: str,
+    minimal_context: dict[str, Any],
+    observations: list[dict[str, Any]],
+    executed_signatures: set[str],
+    preferred_metric: Optional[str],
+    allow_notification_delivery: bool,
+    retry_feedback: Optional[str] = None,
+    request_scope: Optional[RequestToolScope] = None,
+) -> PlannerDecision:
+    """Invoke Ollama once for the current step of the planning loop."""
+    user_payload = _build_planner_user_payload(
+        user_request=user_request,
+        minimal_context=minimal_context,
+        observations=observations,
+        executed_signatures=executed_signatures,
+        preferred_metric=preferred_metric,
+        allow_notification_delivery=allow_notification_delivery,
+        retry_feedback=retry_feedback,
+        request_scope=request_scope,
+    )
 
     payload = {
         "model": settings.LLM_MODEL,
@@ -433,6 +463,65 @@ def _call_ollama_planner_once(
     data = response.json()
     raw_content = data.get("message", {}).get("content", "")
     parsed_json = _extract_json_object(raw_content)
+    return PlannerDecision(**parsed_json)
+
+
+def _call_groq_planner_once(
+    user_request: str,
+    minimal_context: dict[str, Any],
+    observations: list[dict[str, Any]],
+    executed_signatures: set[str],
+    preferred_metric: Optional[str],
+    allow_notification_delivery: bool,
+    retry_feedback: Optional[str] = None,
+    request_scope: Optional[RequestToolScope] = None,
+) -> PlannerDecision:
+    """Invoke Groq cloud inference once in strict JSON mode for the current planning step."""
+    api_key = (settings.GROQ_API_KEY or "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not configured for cloud planning.")
+
+    user_payload = _build_planner_user_payload(
+        user_request=user_request,
+        minimal_context=minimal_context,
+        observations=observations,
+        executed_signatures=executed_signatures,
+        preferred_metric=preferred_metric,
+        allow_notification_delivery=allow_notification_delivery,
+        retry_feedback=retry_feedback,
+        request_scope=request_scope,
+    )
+
+    base_url = settings.GROQ_BASE_URL.rstrip("/")
+    payload = {
+        "model": get_active_llm_model(),
+        "messages": [
+            {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, indent=2)},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.0,
+        "max_tokens": 400,
+    }
+
+    response = httpx.post(
+        f"{base_url}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=PLANNER_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    data = response.json()
+    choices = data.get("choices") or []
+    raw_content = (
+        choices[0].get("message", {}).get("content", "")
+        if choices and isinstance(choices[0], dict)
+        else ""
+    )
+    parsed_json = _extract_json_object(_strip_think_tags(raw_content))
     return PlannerDecision(**parsed_json)
 
 
@@ -1112,11 +1201,12 @@ def select_next_action(
         )
 
     locked_intent: PlannerIntent = request_scope.initial_intent  # type: ignore[assignment]
+    provider = get_active_llm_provider()
 
     try:
-        ollama_online = check_ollama_available()
+        llm_online = check_groq_available() if provider == "groq" else check_ollama_available()
     except Exception:
-        ollama_online = False
+        llm_online = False
 
     # Check if already-executed in-scope tools have sufficiently answered the request
     sufficiency_decision = evaluate_execution_sufficiency(
@@ -1134,12 +1224,13 @@ def select_next_action(
             planner_llm_ms=0,
         )
 
-    if ollama_online:
+    if llm_online:
         retry_feedback: Optional[str] = None
         for attempt in range(1, MAX_PLANNER_RETRIES + 1):
             t_llm = time.time()
             try:
-                decision = _call_ollama_planner_once(
+                planner_call = _call_groq_planner_once if provider == "groq" else _call_ollama_planner_once
+                decision = planner_call(
                     user_request=user_request,
                     minimal_context=minimal_context,
                     observations=observations,
@@ -1147,6 +1238,7 @@ def select_next_action(
                     preferred_metric=preferred_metric or request_scope.primary_metric,
                     allow_notification_delivery=allow_notification_delivery,
                     retry_feedback=retry_feedback,
+                    request_scope=request_scope,
                 )
                 planner_llm_ms += int((time.time() - t_llm) * 1000)
 
@@ -1197,13 +1289,17 @@ def select_next_action(
 
             except (ToolValidationError, ValidationError, ValueError, httpx.HTTPError, Exception) as exc:
                 planner_llm_ms += int((time.time() - t_llm) * 1000)
-                note = f"LLM planner attempt {attempt}/{MAX_PLANNER_RETRIES} rejected: {exc}"
+                safe_err = str(exc)
+                if provider == "groq" and isinstance(exc, httpx.HTTPStatusError):
+                    safe_err = f"Groq HTTP {exc.response.status_code}"
+                note = f"LLM planner ({provider}) attempt {attempt}/{MAX_PLANNER_RETRIES} rejected: {safe_err}"
                 logger.warning(note)
                 rejection_notes.append(note)
-                retry_feedback = str(exc)
+                retry_feedback = safe_err
     else:
+        provider_label = "Groq cloud LLM" if provider == "groq" else "Local Ollama"
         rejection_notes.append(
-            "Local Ollama service unavailable; using adaptive deterministic fallback planner."
+            f"{provider_label} service unavailable; using adaptive deterministic fallback planner."
         )
 
     fallback_decision = select_fallback_next_action(

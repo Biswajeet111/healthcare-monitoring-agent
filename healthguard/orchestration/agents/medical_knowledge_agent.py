@@ -13,7 +13,11 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from healthguard.rag.rag_pipeline import run_rag_pipeline
-from healthguard.rag.llm_service import check_ollama_available
+from healthguard.rag.llm_service import (
+    check_groq_available,
+    check_ollama_available,
+    get_active_llm_provider,
+)
 from healthguard.orchestration.schemas import (
     MedicalCitation,
     MedicalKnowledgeAgentResult,
@@ -80,11 +84,12 @@ class MedicalKnowledgeAgent:
 
         clean_question = question.strip()
 
-        # Check Ollama availability before running RAG to support graceful degradation
+        # Check configured LLM availability before running RAG to support graceful degradation
+        provider = get_active_llm_provider()
         try:
-            ollama_online = check_ollama_available()
+            llm_online = check_groq_available() if provider == "groq" else check_ollama_available()
         except Exception:
-            ollama_online = False
+            llm_online = False
 
         try:
             rag_output = run_rag_pipeline(
@@ -121,9 +126,9 @@ class MedicalKnowledgeAgent:
             clean_answer = raw_answer.strip() if isinstance(raw_answer, str) else ""
 
             # Preserve distinction between:
-            # 1. Successful generation (non-empty answer, no error, Ollama online)
-            # 2. Degraded / fallback execution (Ollama offline, HTTP 500/timeout, or empty/None answer)
-            if raw_error or not ollama_online or not clean_answer:
+            # 1. Successful generation (non-empty answer, no error, LLM provider available)
+            # 2. Degraded / fallback execution (LLM offline, HTTP 500/timeout, or empty/None answer)
+            if raw_error or not llm_online or not clean_answer:
                 status = "degraded"
                 if raw_error and not any(raw_error in lim for lim in limitations):
                     limitations.append(str(raw_error))

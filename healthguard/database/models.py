@@ -13,6 +13,7 @@ from sqlalchemy import (
     CheckConstraint,
     Index,
     JSON,
+    false as sql_false,
 )
 
 from sqlalchemy.orm import relationship
@@ -523,7 +524,7 @@ class MonitoringEvent(Base):
         Boolean,
         nullable=False,
         default=False,
-        server_default="0",
+        server_default=sql_false(),
     )
 
     acknowledged_at = Column(

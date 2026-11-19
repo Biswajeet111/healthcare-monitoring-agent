@@ -11,7 +11,11 @@
 // ---------------------------------------------------------------------------
 
 export const DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+export const DEMO_BANNER_TITLE = 'HealthGuard AI — Educational Demo (Synthetic Data)';
+const RAW_API_BASE = DEMO
+  ? ''
+  : (import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')).trim();
+export const API_BASE = RAW_API_BASE.replace(/\/$/, '');
 const TOKEN_KEY = 'healthguard_token';
 
 export const getToken = () => sessionStorage.getItem(TOKEN_KEY);
@@ -46,6 +50,9 @@ function formatDetail(detail: unknown): string | null {
 type Query = Record<string, string | number | boolean | null | undefined>;
 
 function buildUrl(path: string, query?: Query) {
+  if (!API_BASE) {
+    throw new ApiError(0, 'VITE_API_BASE_URL is not configured for this production build.');
+  }
   const url = new URL(API_BASE + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   return url.toString();
@@ -215,7 +222,16 @@ export const getAdherence = (id: number) => request<Record<string, unknown>>(`/m
 
 export type RagSource = { reference_number: number; document_title: string; source_organization: string; source_url: string; chunk_id: string; relevance_distance: number };
 export type RagAnswer = { answer: string | null; sources: RagSource[]; limitations: string[]; disclaimer: string; model_used?: string; error?: string };
-export type RagStatus = { ollama_available: boolean; available_models: string[]; embedding_model_available: boolean; ready_for_qa: boolean; limitation: string };
+export type RagStatus = {
+  llm_provider?: string;
+  llm_available?: boolean;
+  active_model?: string;
+  ollama_available: boolean;
+  available_models: string[];
+  embedding_model_available: boolean;
+  ready_for_qa: boolean;
+  limitation: string;
+};
 
 export const ragStatus = () => request<RagStatus>('/rag/status');
 
@@ -520,15 +536,146 @@ export const getOrchestrationHistory = (limit = 20) => request<AuditEntry[]>('/o
 export const getOrchestrationAlerts = () => request<OrchestrationAlerts>('/orchestration/alerts');
 
 // ---------------------------------------------------------------------------
-// Demo data (only used when VITE_DEMO_MODE=true)
+// Demo serverless AI assistant (/api/assistant on Vercel) & synthetic data
+// Only used when VITE_DEMO_MODE=true; never simulates backend writes or RAG.
 // ---------------------------------------------------------------------------
 
-export type ChatMessage = { role: 'user' | 'assistant'; text: string; sources?: RagSource[]; limitations?: string[]; model?: string; error?: boolean };
+export type DemoAssistantStatus = {
+  available: boolean;
+  llm_provider: string;
+  llm_available: boolean;
+  active_model: string;
+  rag_grounded: boolean;
+  mode: string;
+  limitation: string;
+};
 
-export const demoMetrics: Metric[] = Array.from({ length: 14 }, (_, i) => {
-  const d = new Date(2026, 9, 28 + i);
-  return { id: String(i), date: d.toISOString().slice(0, 10), heartRate: 69 + (i * 7) % 14, glucose: 92 + (i * 11) % 26, systolic: 112 + (i * 5) % 17, diastolic: 72 + (i * 3) % 13, steps: 4300 + (i * 1237) % 6500 };
+export async function demoAssistantStatus(): Promise<DemoAssistantStatus> {
+  const response = await fetch('/api/assistant', { method: 'GET' });
+  if (!response.ok) {
+    throw new ApiError(response.status, `Demo AI assistant status unavailable (${response.status}).`);
+  }
+  return response.json() as Promise<DemoAssistantStatus>;
+}
+
+export async function askDemoAssistant(question: string): Promise<RagAnswer & { rag_grounded?: boolean; provider_used?: string }> {
+  let response: Response;
+  try {
+    response = await fetch('/api/assistant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+  } catch {
+    throw new ApiError(0, 'Unable to reach the /api/assistant serverless endpoint.');
+  }
+
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    // Non-JSON response
+  }
+
+  if (!response.ok) {
+    const errText =
+      (typeof data.error === 'string' && data.error) ||
+      formatDetail(data.detail) ||
+      `Assistant request failed (${response.status})`;
+    throw new ApiError(response.status, errText);
+  }
+
+  return data as RagAnswer & { rag_grounded?: boolean; provider_used?: string };
+}
+
+export type ChatMessage = {
+  role: 'user' | 'assistant';
+  text: string;
+  sources?: RagSource[];
+  limitations?: string[];
+  model?: string;
+  ragGrounded?: boolean;
+  error?: boolean;
+};
+
+function isoDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+function todayUtcAt(hh: number, mm: number): string {
+  const d = new Date();
+  d.setUTCHours(hh, mm, 0, 0);
+  return d.toISOString();
+}
+
+export const demoMetrics: Metric[] = Array.from({ length: 30 }, (_, i) => {
+  const daysAgo = 29 - i;
+  const date = isoDaysAgo(daysAgo);
+  const wave = Math.sin(i / 3.5);
+  return {
+    id: `demo-${date}`,
+    date,
+    heartRate: Math.round(71 + wave * 5 + ((i * 3) % 4)),
+    glucose: Math.round(104 + (i >= 24 ? (i - 23) * 6 : wave * 8) + ((i * 5) % 7)),
+    systolic: Math.round(121 + (i >= 25 ? (i - 24) * 2 : wave * 4) + ((i * 2) % 4)),
+    diastolic: Math.round(77 + wave * 3 + (i % 3)),
+    steps: Math.round(5400 + ((i * 1187) % 4600)),
+  };
 });
+
+export const demoMedications: Medication[] = [
+  {
+    id: 101,
+    name: 'Metformin (Synthetic)',
+    dosage: '500 mg',
+    frequency: 'Twice daily',
+    instructions: 'Take with morning and evening meals · Synthetic demo entry',
+    start_date: `${isoDaysAgo(45)}T00:00:00Z`,
+    end_date: null,
+    is_active: true,
+    created_at: `${isoDaysAgo(45)}T08:00:00Z`,
+  },
+  {
+    id: 102,
+    name: 'Lisinopril (Synthetic)',
+    dosage: '10 mg',
+    frequency: 'Once daily',
+    instructions: 'Morning routine · Synthetic demo entry',
+    start_date: `${isoDaysAgo(60)}T00:00:00Z`,
+    end_date: null,
+    is_active: true,
+    created_at: `${isoDaysAgo(60)}T08:00:00Z`,
+  },
+  {
+    id: 103,
+    name: 'Vitamin D3 (Synthetic)',
+    dosage: '1000 IU',
+    frequency: 'Once daily',
+    instructions: 'Take with lunch · Synthetic demo entry',
+    start_date: `${isoDaysAgo(30)}T00:00:00Z`,
+    end_date: null,
+    is_active: true,
+    created_at: `${isoDaysAgo(30)}T08:00:00Z`,
+  },
+];
+
+export const demoMedicationMeta: Record<
+  number,
+  { scheduleText: string; adherence7d: number; adherence30d: number; overall: number; taken: number; missed: number; skipped: number; unconfirmed: number }
+> = {
+  101: { scheduleText: 'Daily at 08:00, 20:00 (synthetic)', adherence7d: 85.7, adherence30d: 88.3, overall: 88.3, taken: 53, missed: 5, skipped: 1, unconfirmed: 1 },
+  102: { scheduleText: 'Daily at 08:30 (synthetic)', adherence7d: 100, adherence30d: 93.3, overall: 93.3, taken: 28, missed: 2, skipped: 0, unconfirmed: 0 },
+  103: { scheduleText: 'Daily at 13:00 (synthetic)', adherence7d: 85.7, adherence30d: 86.7, overall: 86.7, taken: 26, missed: 3, skipped: 1, unconfirmed: 0 },
+};
+
+export const demoTodayDoses: TodayDose[] = [
+  { occurrence_id: 901, medication_id: 101, medication_name: 'Metformin (Synthetic) · 500 mg', scheduled_at: todayUtcAt(8, 0), status: 'taken', taken_at: todayUtcAt(8, 12), notes: null },
+  { occurrence_id: 902, medication_id: 102, medication_name: 'Lisinopril (Synthetic) · 10 mg', scheduled_at: todayUtcAt(8, 30), status: 'taken', taken_at: todayUtcAt(8, 35), notes: null },
+  { occurrence_id: 903, medication_id: 103, medication_name: 'Vitamin D3 (Synthetic) · 1000 IU', scheduled_at: todayUtcAt(13, 0), status: 'missed', taken_at: null, notes: null },
+  { occurrence_id: 904, medication_id: 101, medication_name: 'Metformin (Synthetic) · 500 mg', scheduled_at: todayUtcAt(20, 0), status: 'upcoming', taken_at: null, notes: null },
+];
 
 // ---------------------------------------------------------------------------
 // Formatting helpers

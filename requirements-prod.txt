@@ -1,0 +1,39 @@
+# Lean production dependencies for HealthGuard AI FastAPI backend
+# Uses CPU-only PyTorch wheel to keep container size and memory usage lower.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Web framework & ASGI server
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+python-multipart>=0.0.9
+
+# Configuration & validation
+pydantic>=2.7.0,<3.0.0
+pydantic-settings>=2.3.0,<3.0.0
+email-validator>=2.1.0
+python-dotenv>=1.0.1
+
+# Database & migrations (SQLite + PostgreSQL)
+SQLAlchemy>=2.0.30,<3.0.0
+alembic>=1.13.0
+psycopg2-binary>=2.9.9
+
+# Authentication & password hashing
+python-jose[cryptography]>=3.3.0
+pwdlib[argon2]>=0.2.0
+argon2-cffi>=23.1.0
+
+# HTTP client (Groq & Ollama API integration)
+httpx>=0.27.0
+
+# PDF extraction & clinical RAG
+pypdf>=5.0.0
+chromadb>=0.5.5
+torch>=2.2.0
+sentence-transformers>=3.0.0
+
+# Experimental ML screening & longitudinal analytics
+scikit-learn==1.7.2
+joblib>=1.4.0
+numpy>=1.26.0
+pandas>=2.2.0

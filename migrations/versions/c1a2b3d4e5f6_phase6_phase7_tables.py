@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column('timezone', sa.String(length=60), nullable=False, server_default='UTC'),
         sa.Column('effective_from', sa.DateTime(), nullable=False),
         sa.Column('effective_until', sa.DateTime(), nullable=True),
-        sa.Column('is_active', sa.Boolean(), nullable=False, server_default='1'),
+        sa.Column('is_active', sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.CheckConstraint(
             "schedule_type IN ('daily', 'weekly', 'as_needed')",

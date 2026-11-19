@@ -26,10 +26,12 @@ from healthguard.api.medical_rag import (
 from healthguard.api.orchestration import (
     router as orchestration_router,
 )
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+from healthguard.core.config import settings
 from healthguard.services.csv_service import parse_health_csv
 from healthguard.database.models import MedicalDocument
-from healthguard.services.document_service import process_medical_pdf
+from healthguard.services.document_service import get_upload_dir, process_medical_pdf
 from healthguard.schemas import MedicalDocumentResponse
 from healthguard.core.dependencies import get_current_user
 from healthguard.core.security import (
@@ -59,6 +61,7 @@ import logging
 from healthguard.schemas import DiabetesPredictionV3Response
 
 from healthguard.ml.diabetes_v3_predictor import (
+    DiabetesModelError,
     predict_diabetes_v3,
 )
 
@@ -87,20 +90,19 @@ from healthguard.schemas import (
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="HealthGuard AI",
+    title=settings.APP_NAME,
     description="Agentic AI-Powered Personal Healthcare Intelligence Platform",
-    version="1.0.0",
+    version=settings.APP_VERSION,
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
-)
+cors_kwargs = {
+    "allow_origins": settings.cors_origins_list,
+    "allow_credentials": True,
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type"],
+}
+if settings.CORS_ORIGIN_REGEX:
+    cors_kwargs["allow_origin_regex"] = settings.CORS_ORIGIN_REGEX
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 app.include_router(monitoring_events_router)
 app.include_router(notifications_router)
 app.include_router(medication_management_router)
@@ -118,9 +120,11 @@ async def lifespan(app):
         start_reminder_worker,
         stop_reminder_worker,
     )
-    start_reminder_worker()
+    if settings.ENABLE_REMINDER_WORKER:
+        start_reminder_worker()
     yield
-    stop_reminder_worker()
+    if settings.ENABLE_REMINDER_WORKER:
+        stop_reminder_worker()
 
 app.router.lifespan_context = lifespan
 def verify_user_access(
@@ -165,6 +169,28 @@ def get_owned_medication(
 @app.get("/")
 def home():
     return {"message": "HealthGuard AI API is running"}
+
+
+@app.get("/health", tags=["System"])
+def health_check(db: Session = Depends(get_db)):
+    """Lightweight liveness and database readiness check for cloud hosting."""
+    db_status = "connected"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        db_status = "error"
+        raise HTTPException(
+            status_code=503,
+            detail="Database connectivity check failed",
+        )
+
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "database": db_status,
+        "llm_provider": settings.LLM_PROVIDER,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1448,10 +1474,13 @@ def delete_medical_document(
         )
 
     stored_path = Path(document.stored_path).resolve()
-    upload_root = Path("storage/medical_reports").resolve()
+    allowed_roots = [
+        get_upload_dir().resolve(),
+        Path("storage/medical_reports").resolve(),
+    ]
 
-    # Prevent deletion outside the medical reports directory.
-    if upload_root not in stored_path.parents:
+    # Prevent deletion outside the configured medical reports directory.
+    if not any(root in stored_path.parents for root in allowed_roots):
         raise HTTPException(
             status_code=400,
             detail="Invalid document storage path"
@@ -1652,7 +1681,7 @@ def diabetes_prediction_v3(
             detail="Diabetes screening service is unavailable",
         ) from exc
 
-    except (FileNotFoundError, OSError, KeyError, TypeError):
+    except (DiabetesModelError, FileNotFoundError, OSError, KeyError, TypeError):
         raise HTTPException(
             status_code=503,
             detail="Diabetes screening service is unavailable",

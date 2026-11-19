@@ -12,9 +12,11 @@ Provides local embeddings:
 import logging
 from typing import Optional
 
+from healthguard.core.config import settings
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_ST_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_ST_MODEL = settings.EMBEDDING_MODEL or "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
 _st_model = None
@@ -42,7 +44,11 @@ def _fallback_embed(texts: list[str]) -> list[list[float]]:
 
 
 def get_embedding_model(model_name: Optional[str] = None):
-    """Attempt to load SentenceTransformer model if available locally without blocking."""
+    """Load and cache the SentenceTransformer model once per process.
+
+    Checks local cache first to avoid unnecessary network calls on startup;
+    if not yet cached and EMBEDDING_LOCAL_FILES_ONLY is False, downloads once.
+    """
     global _st_model, _st_load_attempted
     if _st_model is not None:
         return _st_model
@@ -50,16 +56,34 @@ def get_embedding_model(model_name: Optional[str] = None):
         return None
 
     _st_load_attempted = True
+    name = model_name or settings.EMBEDDING_MODEL or DEFAULT_ST_MODEL
     try:
         from sentence_transformers import SentenceTransformer
-        name = model_name or DEFAULT_ST_MODEL
-        model = SentenceTransformer(name, local_files_only=True)
-        _st_model = model
-        logger.info("SentenceTransformer model loaded locally: %s", name)
-        return _st_model
+
+        try:
+            model = SentenceTransformer(name, local_files_only=True)
+            _st_model = model
+            logger.info("SentenceTransformer model loaded from local cache: %s", name)
+            return _st_model
+        except Exception as local_exc:
+            if settings.EMBEDDING_LOCAL_FILES_ONLY:
+                logger.info(
+                    "SentenceTransformer not cached locally (%s) and EMBEDDING_LOCAL_FILES_ONLY=true.",
+                    local_exc,
+                )
+                return None
+
+            logger.info(
+                "SentenceTransformer not found in local cache; downloading once: %s",
+                name,
+            )
+            model = SentenceTransformer(name, local_files_only=False)
+            _st_model = model
+            logger.info("SentenceTransformer model downloaded and loaded: %s", name)
+            return _st_model
     except Exception as exc:
-        logger.info(
-            "SentenceTransformer not cached locally (%s). Using deterministic local vectorizer fallback.",
+        logger.warning(
+            "SentenceTransformer unavailable (%s).",
             exc,
         )
         return None

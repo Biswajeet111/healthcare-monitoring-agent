@@ -7,8 +7,15 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 from pypdf import PdfReader
 
-UPLOAD_DIR = Path("storage/medical_reports")
+from healthguard.core.config import settings
+
+UPLOAD_DIR = Path(settings.UPLOAD_DIR)
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+def get_upload_dir() -> Path:
+    """Return the configured medical reports directory."""
+    return Path(settings.UPLOAD_DIR)
 
 
 async def process_medical_pdf(file: UploadFile):
@@ -53,10 +60,11 @@ async def process_medical_pdf(file: UploadFile):
 
     file_hash = hashlib.sha256(content).hexdigest()
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    upload_dir = get_upload_dir()
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
     stored_filename = f"{uuid4().hex}.pdf"
-    stored_path = UPLOAD_DIR / stored_filename
+    stored_path = upload_dir / stored_filename
 
     with open(stored_path, "wb") as output:
         output.write(content)
@@ -71,18 +79,20 @@ async def process_medical_pdf(file: UploadFile):
 
 
 def resolve_stored_document_path(stored_path_str: str) -> Path | None:
-    """Resolve a stored medical PDF path safely against both CWD and repo root."""
+    """Resolve a stored medical PDF path safely against configured upload dir, CWD, and repo root."""
     if not stored_path_str:
         return None
 
     repo_root = Path(__file__).resolve().parents[2]
     allowed_roots = [
+        get_upload_dir().resolve(),
         Path("storage/medical_reports").resolve(),
         (repo_root / "storage" / "medical_reports").resolve(),
     ]
     candidates = [
         Path(stored_path_str).resolve(),
         (repo_root / stored_path_str).resolve(),
+        (get_upload_dir() / Path(stored_path_str).name).resolve(),
     ]
 
     for candidate in candidates:

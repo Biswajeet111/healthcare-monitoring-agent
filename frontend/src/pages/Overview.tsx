@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, ArrowRight, ArrowUpRight, Bell, Bot, BrainCircuit, ClipboardList, Heart, HeartPulse, ShieldCheck, Stethoscope, Watch } from 'lucide-react';
-import { errorMessage, fmtDateTime, fmtTime, getOrchestrationAlerts, getTodayDoses, humanize, type Metric, type OrchestrationAlerts, type TodayDose, type UserProfile } from '../api';
+import { DEMO, demoTodayDoses, errorMessage, fmtDateTime, fmtTime, getOrchestrationAlerts, getTodayDoses, humanize, type Metric, type OrchestrationAlerts, type TodayDose, type UserProfile } from '../api';
 import { Alert, Badge, ChartCard, Empty, Spinner, Stat, type Range } from '../components/ui';
 import type { Page } from '../App';
 
@@ -52,6 +52,16 @@ export default function Overview({ user, metrics, chartData, range, setRange, se
         <button className="feature-row as-button" onClick={() => setPage('Agents')}><span className="feature-icon green"><ShieldCheck size={19} /></span><div><b>Safety-oriented workflows</b><small>Run a multi-agent health assessment</small></div><ArrowUpRight size={17} /></button>
         <button className="panel-link" onClick={() => setPage('AI Assistant')}>Open assistant <ArrowRight size={16} /></button></div>
     </div>
+    {DEMO && !user && (
+      <div className="two-cols overview-lower">
+        <div className="panel"><div className="panel-heading"><div><h3>Active monitoring alerts</h3><p>Live backend monitoring pipeline</p></div><span className="panel-icon"><Bell size={20} /></span></div>
+          <Alert kind="info">Live statistical deviation alerts, notification delivery, and safety escalations require the full FastAPI backend and are unavailable in this lightweight Vercel demo.</Alert>
+          <button className="panel-link" onClick={() => setPage('Notifications')}>View notifications details <ArrowRight size={16} /></button></div>
+        <div className="panel"><div className="panel-heading"><div><h3>Today's medications (Synthetic)</h3><p>Read-only synthetic schedule preview</p></div><span className="panel-icon"><ClipboardList size={20} /></span></div>
+          <div className="list">{demoTodayDoses.map(d => <div className="list-row" key={d.occurrence_id}><Badge value={d.status} /><div><b>{d.medication_name}</b><small>{fmtTime(d.scheduled_at)}</small></div></div>)}</div>
+          <button className="panel-link" onClick={() => setPage('Medications')}>Inspect synthetic medications <ArrowRight size={16} /></button></div>
+      </div>
+    )}
     {user && <>
       {error && <Alert>{error}</Alert>}
       <div className="two-cols overview-lower">

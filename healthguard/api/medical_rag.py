@@ -36,7 +36,12 @@ from healthguard.rag.document_ingestion import (
     ingest_user_document,
     delete_user_document_index,
 )
-from healthguard.rag.llm_service import check_ollama_available, list_ollama_models
+from healthguard.rag.llm_service import (
+    check_llm_available,
+    get_active_llm_model,
+    get_active_llm_provider,
+    list_available_llm_models,
+)
 from healthguard.rag.rag_pipeline import run_rag_pipeline
 from healthguard.rag.retriever import (
     retrieve_from_global_knowledge,
@@ -118,26 +123,32 @@ def ask_medical_question(
 def get_rag_status(
     current_user: UserProfile = Depends(get_current_user),
 ):
-    """Check the status of the RAG system (embedding + LLM availability)."""
-    ollama_available = check_ollama_available()
-    models = list_ollama_models() if ollama_available else []
+    """Check the status of the RAG system (embedding + active LLM provider availability)."""
+    provider = get_active_llm_provider()
+    llm_available = check_llm_available(verify_remote=(provider == "groq"))
+    models = list_available_llm_models() if llm_available else []
+    active_model = get_active_llm_model()
 
     embedding_available = False
     try:
         from healthguard.rag.embedding_service import get_embedding_model
-        get_embedding_model()
-        embedding_available = True
+        embedding_available = get_embedding_model() is not None
     except Exception:
         pass
 
+    provider_label = "Groq cloud LLM" if provider == "groq" else "Ollama"
+
     return {
-        "ollama_available": ollama_available,
+        "llm_provider": provider,
+        "llm_available": llm_available,
+        "active_model": active_model,
+        "ollama_available": llm_available,
         "available_models": models,
         "embedding_model_available": embedding_available,
-        "ready_for_qa": ollama_available and embedding_available,
+        "ready_for_qa": llm_available and embedding_available,
         "limitation": (
-            "If Ollama is not available, questions will return an error. "
-            "Semantic retrieval (similarity search) works independently of Ollama."
+            f"If {provider_label} is not available, questions will return an error. "
+            "Semantic retrieval (similarity search) works independently of the LLM provider."
         ),
     }
 

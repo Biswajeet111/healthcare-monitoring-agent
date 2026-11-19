@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Plus, Upload } from 'lucide-react';
-import { createBloodPressure, createMetric, errorMessage, importCsv, METRIC_TYPES, type Metric, type MetricType, type UserProfile } from '../api';
+import { createBloodPressure, createMetric, DEMO, errorMessage, importCsv, METRIC_TYPES, type Metric, type MetricType, type UserProfile } from '../api';
 import { Alert, ChartCard, type Range } from '../components/ui';
 import { SnapshotStats } from './Overview';
 
@@ -61,7 +61,10 @@ export default function Analytics({ user, metrics, chartData, range, setRange, o
   }
 
   return <>
-    <SnapshotStats metrics={metrics} note="Latest" />
+    <SnapshotStats metrics={metrics} note={DEMO && !user ? 'Latest synthetic reading' : 'Latest'} />
+    {DEMO && !user && (
+      <Alert kind="info">Recording new measurements, bulk CSV imports, and automated monitoring triggers require the full FastAPI + database backend and are unavailable in this lightweight Vercel demo. The charts and table below display 30 days of synthetic health measurements.</Alert>
+    )}
     {user && <div className="panel entry-panel">
       <div className="panel-heading"><div><h3>Record a measurement</h3><p>Saved to your account · values are not diagnostic</p></div>
         <div className="row-actions"><input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={e => void onCsv(e.target.files?.[0])} /><button type="button" className="btn btn-ghost" disabled={importing} onClick={() => fileRef.current?.click()}><Upload size={15} />{importing ? 'Importing…' : 'Import CSV'}</button></div></div>

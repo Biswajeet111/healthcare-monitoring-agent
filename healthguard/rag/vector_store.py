@@ -16,21 +16,29 @@ from typing import Optional
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
+from healthguard.core.config import settings
+
 logger = logging.getLogger(__name__)
 
-# ChromaDB persisted at data/vector_db
-VECTOR_DB_PATH = str(Path(__file__).resolve().parents[2] / "data" / "vector_db")
+# ChromaDB persisted path (configurable via VECTOR_DB_PATH for cloud volumes)
+VECTOR_DB_PATH = str(Path(settings.VECTOR_DB_PATH))
 
 GLOBAL_KNOWLEDGE_COLLECTION = "medical_knowledge"
 USER_DOC_COLLECTION_PREFIX = "user_documents_"
 
+_chroma_clients: dict[str, chromadb.ClientAPI] = {}
+
 
 def _get_chroma_client() -> chromadb.ClientAPI:
-    """Return a persistent ChromaDB client."""
-    return chromadb.PersistentClient(
-        path=VECTOR_DB_PATH,
-        settings=ChromaSettings(anonymized_telemetry=False),
-    )
+    """Return a cached persistent ChromaDB client for the configured path."""
+    db_path = str(Path(VECTOR_DB_PATH or settings.VECTOR_DB_PATH))
+    if db_path not in _chroma_clients:
+        Path(db_path).mkdir(parents=True, exist_ok=True)
+        _chroma_clients[db_path] = chromadb.PersistentClient(
+            path=db_path,
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+    return _chroma_clients[db_path]
 
 
 def get_global_collection() -> chromadb.Collection:

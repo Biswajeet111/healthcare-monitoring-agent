@@ -15,6 +15,7 @@ node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.*
+!frontend/.env.example
 
 # Local databases
 *.db

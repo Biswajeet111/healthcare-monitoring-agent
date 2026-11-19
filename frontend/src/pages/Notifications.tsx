@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, Bell, CheckCircle2, Clock, RefreshCw } from 'lucide-react';
 import {
-  acknowledgeEvent, acknowledgeReminder, errorMessage, fmtDateTime, humanize, listMonitoringEvents, listNotifications, listReminders, notificationSummary,
+  acknowledgeEvent, acknowledgeReminder, DEMO, errorMessage, fmtDateTime, humanize, listMonitoringEvents, listNotifications, listReminders, notificationSummary,
   type MonitoringEvent, type Reminder, type UserProfile,
 } from '../api';
 import { Alert, Badge, Empty, Spinner } from '../components/ui';
@@ -53,7 +53,13 @@ export default function Notifications({ user, onChanged }: { user: UserProfile |
     finally { setBusyId(null); }
   }
 
-  if (!user) return <Alert kind="info">Sign in to the live backend to view notifications and monitoring events.</Alert>;
+  if (!user) {
+    return <Alert kind="info">
+      {DEMO
+        ? 'Live statistical monitoring events, notification feeds, and medication reminder acknowledgments require the full FastAPI + database backend and are unavailable in this lightweight Vercel demo.'
+        : 'Sign in to the live backend to view notifications and monitoring events.'}
+    </Alert>;
+  }
 
   return <div className="stack">
     {msg && <Alert kind={msg.kind} onClose={() => setMsg(null)}>{msg.text}</Alert>}

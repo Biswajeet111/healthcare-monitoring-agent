@@ -1,0 +1,46 @@
+# Render Blueprint for HealthGuard AI Backend
+# IMPORTANT: Measured steady-state RSS with SentenceTransformer (all-MiniLM-L6-v2) + ChromaDB
+# is ~597 MB (peaking 650-850 MB). Render Free (512 MB, ephemeral disk) is insufficient.
+# Use `plan: standard` (2 GB RAM) + persistent disk on Render, OR use the zero-cost
+# Hugging Face Spaces (16 GB RAM free Docker SDK) + Neon PostgreSQL alternative in DEPLOYMENT.md.
+
+services:
+  - type: web
+    name: healthguard-ai-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard
+    healthCheckPath: /health
+    disk:
+      name: healthguard-data
+      mountPath: /var/data
+      sizeGB: 2
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: LLM_PROVIDER
+        value: "groq"
+      - key: GROQ_MODEL
+        value: "qwen/qwen3.8-27b"
+      - key: ALLOW_CLOUD_PERSONAL_DATA
+        value: "true"
+      - key: EMBEDDING_MODEL
+        value: "all-MiniLM-L6-v2"
+      - key: EMBEDDING_LOCAL_FILES_ONLY
+        value: "true"
+      - key: VECTOR_DB_PATH
+        value: "/var/data/vector_db"
+      - key: UPLOAD_DIR
+        value: "/var/data/medical_reports"
+      - key: ENABLE_REMINDER_WORKER
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DIABETES_V3_SHA256
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

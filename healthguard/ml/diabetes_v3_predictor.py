@@ -38,14 +38,6 @@ MODEL_DIR = ROOT / "models" / "diabetes_v3_candidate"
 
 MODEL_PATH = MODEL_DIR / "pipeline.joblib"
 
-try:
-    verify_model_integrity(MODEL_PATH)
-
-except ModelIntegrityError as exc:
-    raise DiabetesModelError(
-        "Diabetes v3 model integrity verification failed"
-    ) from exc
-
 METADATA_PATH = MODEL_DIR / "metadata.json"
 
 MODEL_VERSION = "experimental-v3-candidate"
@@ -155,6 +147,13 @@ def load_v3_model():
         raise DiabetesModelError(
             "Diabetes v3 metadata is unavailable"
         )
+
+    try:
+        verify_model_integrity(MODEL_PATH)
+    except ModelIntegrityError as exc:
+        raise DiabetesModelError(
+            "Diabetes v3 model integrity verification failed"
+        ) from exc
 
     # Read model metadata.
     try:
